@@ -1,6 +1,6 @@
 # Holdline
 
-Holdline is a five-stage incident response harness connected to TrueForge. It investigates alerts, collects evidence, proposes the smallest safe remediation, and stops at a hard approval gate before anything irreversible can run.
+Holdline is a five-stage incident response harness connected to TrueForge, built for The Agent Harness Hackathon. It investigates alerts, collects evidence, proposes the smallest safe remediation, and stops at a hard approval gate before anything irreversible can run.
 
 This repo includes:
 
@@ -20,6 +20,17 @@ Holdline is designed to walk through:
 5. Approve
 
 It ships with mock incident data for demo alerts and a custom-alert path that stays low-confidence instead of inventing telemetry.
+
+## Hackathon fit
+
+Holdline is aimed at the hackathon themes of:
+
+- real tools connected through MCP
+- safe code or action execution through a harness
+- a visible pause before irreversible actions
+- a UI that shows what the agent is doing and waiting on
+
+That makes it a strong fit for the Best Use of TrueForge and Best UI tracks.
 
 ## TrueForge integration
 
@@ -74,4 +85,3 @@ npm run mcp:incident-monitoring:http
 
 - The HTTP bridge is local-only by default and uses `127.0.0.1:8000`.
 - If you want to deploy this integration outside your machine, you will need to host the bridge at a public URL and point TrueForge at that URL instead of `localhost`.
-
