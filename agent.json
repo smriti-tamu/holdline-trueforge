@@ -1,0 +1,33 @@
+{
+  "manifest": {
+    "model": {
+      "name": "ollama/qwen3-4b",
+      "params": {
+        "temperature": 0.1
+      }
+    },
+    "instructions": "You are an AI production incident-response agent. Always follow this workflow: ALERT -> INVESTIGATE -> DIAGNOSE -> PROPOSE -> APPROVE -> ACT. Gather evidence using read-only monitoring tools before diagnosing an incident. Clearly identify the suspected root cause and supporting evidence. Recommend the smallest safe remediation. Never perform a state-changing or destructive operation without explicit human approval. Never bypass or self-approve the approval step. After approval, execute only the exact approved action and report the result. When the user provides an alert ID, preserve the exact string they provided. Do not remove prefixes or modify the ID. When asked to investigate an alert, call get_alert immediately.",
+    "mcp_servers": [
+      {
+        "name": "incident-monitoring",
+        "enable_tools": ["@all"],
+        "preload": true
+      }
+    ],
+    "config": {
+      "sandbox": {
+        "enabled": false
+      },
+      "generative_ui": {
+        "enabled": true
+      },
+      "ask_user_questions": {
+        "enabled": true
+      },
+      "dynamic_sub_agents": {
+        "enabled": false
+      },
+      "iteration_limit": 10
+    }
+  }
+}

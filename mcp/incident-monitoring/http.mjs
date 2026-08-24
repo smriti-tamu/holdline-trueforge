@@ -1,0 +1,370 @@
+#!/usr/bin/env node
+
+import http from "node:http";
+import process from "node:process";
+
+const SERVER_INFO = {
+  name: "incident-monitoring",
+  version: "1.0.0",
+};
+
+const TOOLS = [
+  {
+    name: "get_alert",
+    description: "Return the incident summary for an alert ID or alert text.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        alertId: { type: "string", description: "Exact alert ID or alert text supplied by the user." },
+      },
+      required: ["alertId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "query_metrics",
+    description: "Read-only metrics lookup for the current alert.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        alertId: { type: "string" },
+        query: { type: "string" },
+      },
+      required: ["alertId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "query_logs",
+    description: "Read-only log lookup for the current alert.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        alertId: { type: "string" },
+        query: { type: "string" },
+      },
+      required: ["alertId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "list_deploys",
+    description: "Read-only deploy history lookup.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        alertId: { type: "string" },
+        service: { type: "string" },
+      },
+      required: ["alertId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "search_tickets",
+    description: "Read-only ticket lookup.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        alertId: { type: "string" },
+        query: { type: "string" },
+      },
+      required: ["alertId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_trace",
+    description: "Read-only trace lookup for the current alert.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        alertId: { type: "string" },
+        traceId: { type: "string" },
+      },
+      required: ["alertId"],
+      additionalProperties: false,
+    },
+  },
+];
+
+const TEST_ALERTS = [
+  {
+    id: "checkout",
+    service: "checkout",
+    severity: "SEV-1",
+    region: "us-east-1",
+    alert:
+      "Checkout error rate jumped from 0.3% to 8.7% in the last 12 minutes in us-east-1 after deploy 4c21.",
+    summary: "Checkout error rate spike after deploy 4c21.",
+    metrics:
+      "checkout.error_rate{region=us-east-1}\n  0.3% -> 8.7%\npayment.latency_p99\n  812ms",
+    logs:
+      "ERROR PaymentAdapter timeout after 500ms trace=8af2c1 deploy=4c21\nERROR PaymentAdapter timeout after 500ms trace=91bb04 deploy=4c21",
+    deploys:
+      "4c21  12:01 UTC  checkout-service  tighten PaymentAdapter timeout\n9e10  stable baseline",
+    tickets: "No matching open tickets in the mock catalog.",
+    traces:
+      "trace=8af2c1\ncheckout /checkout 502ms error=timeout\npayment /charge 812ms status=200",
+  },
+  {
+    id: "payment",
+    service: "payment",
+    severity: "SEV-1",
+    region: "global",
+    alert: "Payment service is returning 502s for 40% of requests. Started at 14:22 UTC.",
+    summary: "Payment 502s caused by session-store pressure on redis-cluster-2.",
+    metrics:
+      "payment.http_5xx 0.40\nredis-cluster-2.mem 0.97\nredis-cluster-2.evict 12400/min\nredis-cluster-2.cpu 0.91",
+    logs:
+      "ERROR session store: connection reset host=redis-cluster-2:6379\nWARN retry exhausted, returning 502",
+    deploys: "No payment-service deploys in the last 6 hours.",
+    tickets: "INC-4412 14:18 UTC infra redis-cluster-2 memory pressure",
+    traces: "payment /charge -> redis-cluster-2 connection reset\nupstream returns 502 after retry exhaustion",
+  },
+  {
+    id: "recs",
+    service: "recommendation",
+    severity: "SEV-2",
+    region: "global",
+    alert: "CPU on the recommendation service is at 97% and p99 latency is 4.2s.",
+    summary: "Recommendation service cache stampede after TTL dropped to 30s.",
+    metrics:
+      "cpu 0.97\np99 4.2s\ncache_miss 0.12 -> 0.78\norigin_rps x6",
+    logs:
+      "cache miss on popular:home, popular:foryou, similar:*\norigin handler occupying 20+ worker threads",
+    deploys: "30m ago recs-cache config CACHE_TTL=30 (was 3600).",
+    tickets: "No matching open tickets in the mock catalog.",
+    traces: "edge RPS flat\norigin RPS spikes in lockstep with cache misses",
+  },
+  {
+    id: "auth",
+    service: "auth",
+    severity: "SEV-1",
+    region: "global",
+    alert: "New critical vulnerability flagged in the auth library we deployed 45 minutes ago.",
+    summary: "Critical auth-library vulnerability with no exploitation observed yet.",
+    metrics:
+      "auth.error_rate baseline\nlatency baseline\nno exploitation signal",
+    logs:
+      "No malformed-token spikes.\nNo RCE-like payloads.\nError rate unchanged.",
+    deploys: "45m ago auth-service auth-lib 2.4.1 (was 2.3.9).",
+    tickets: "CVE-2026-8841 CVSS 9.8 RCE in token parser",
+    traces: "p99 41ms (baseline 38ms). error_rate 0.12% (baseline 0.11%).",
+  },
+];
+
+function normalize(text) {
+  return String(text).toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function inferService(text) {
+  const match = String(text).match(/\b([a-z][a-z0-9_-]*(?:service|svc|api)?)\b/i);
+  return match?.[1] ?? "production";
+}
+
+function inferRegion(text) {
+  const match = String(text).match(/\b(us-east-1|us-west-2|eu-west-1|ap-south-1)\b/i);
+  return match?.[1] ?? "unknown";
+}
+
+function matchScenario(alertId) {
+  const value = normalize(alertId);
+  if (value.includes("checkout") || value.includes("4c21")) return TEST_ALERTS[0];
+  if (value.includes("payment") || value.includes("502")) return TEST_ALERTS[1];
+  if (value.includes("recommendation") || value.includes("cpu") || value.includes("latency")) {
+    return TEST_ALERTS[2];
+  }
+  if (value.includes("auth") || value.includes("vulnerab") || value.includes("library")) {
+    return TEST_ALERTS[3];
+  }
+  return null;
+}
+
+function resolveAlert(input) {
+  const alertId = typeof input?.alertId === "string" ? input.alertId : "";
+  const scenario = matchScenario(alertId);
+  if (scenario) return { scenario, alertId };
+  return {
+    scenario: {
+      id: "generic",
+      service: inferService(alertId),
+      severity: /sev-?1|crit|p0/i.test(alertId) ? "SEV-1" : "SEV-2",
+      region: inferRegion(alertId),
+      alert: alertId,
+      summary: "Low-confidence alert with incomplete telemetry.",
+      metrics: "No high-resolution metrics available in the mock catalog.",
+      logs: "No stored logs available in the mock catalog.",
+      deploys: "No matching deploy records in the mock catalog.",
+      tickets: "No matching tickets in the mock catalog.",
+      traces: "No matching trace in the mock catalog.",
+    },
+    alertId,
+  };
+}
+
+function jsonText(value) {
+  return JSON.stringify(value, null, 2);
+}
+
+function toolText(title, body) {
+  return `${title}\n\n${body}`;
+}
+
+function callTool(name, args) {
+  const { scenario, alertId } = resolveAlert(args);
+
+  if (name === "get_alert") {
+    return toolText(
+      "Stage 1 - Alert Reception",
+      jsonText({
+        alert_id: alertId,
+        service: scenario.service,
+        severity: scenario.severity,
+        region: scenario.region,
+        summary: scenario.summary,
+        raw_alert: scenario.alert,
+      }),
+    );
+  }
+
+  if (name === "query_metrics") {
+    return toolText("Metrics", jsonText({ alert_id: alertId, metrics: scenario.metrics }));
+  }
+
+  if (name === "query_logs") {
+    return toolText("Logs", jsonText({ alert_id: alertId, logs: scenario.logs }));
+  }
+
+  if (name === "list_deploys") {
+    return toolText("Deploys", jsonText({ alert_id: alertId, deploys: scenario.deploys }));
+  }
+
+  if (name === "search_tickets") {
+    return toolText("Tickets", jsonText({ alert_id: alertId, tickets: scenario.tickets }));
+  }
+
+  if (name === "get_trace") {
+    return toolText("Trace", jsonText({ alert_id: alertId, traces: scenario.traces }));
+  }
+
+  throw new Error(`Unknown tool: ${name}`);
+}
+
+function handleRpc(message) {
+  if (!message || typeof message !== "object") {
+    return { error: { code: -32600, message: "Invalid Request" } };
+  }
+
+  if (message.method === "initialize") {
+    return {
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+        serverInfo: SERVER_INFO,
+        capabilities: {
+          tools: { listChanged: false },
+        },
+      },
+    };
+  }
+
+  if (message.method === "notifications/initialized") {
+    return { notification: true };
+  }
+
+  if (message.method === "tools/list") {
+    return { jsonrpc: "2.0", id: message.id, result: { tools: TOOLS } };
+  }
+
+  if (message.method === "tools/call") {
+    try {
+      const text = callTool(message.params?.name, message.params?.arguments ?? {});
+      return { jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text }] } };
+    } catch (error) {
+      return {
+        jsonrpc: "2.0",
+        id: message.id,
+        error: {
+          code: -32603,
+          message: error instanceof Error ? error.message : "tool execution failed",
+        },
+      };
+    }
+  }
+
+  if (message.id != null) {
+    return {
+      jsonrpc: "2.0",
+      id: message.id,
+      error: {
+        code: -32601,
+        message: `Method not found: ${message.method}`,
+      },
+    };
+  }
+
+  return { notification: true };
+}
+
+function sendJson(res, status, body, headers = {}) {
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    ...headers,
+  });
+  res.end(JSON.stringify(body));
+}
+
+function parseJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+const host = process.env.HOST || "127.0.0.1";
+const port = Number(process.env.PORT || 8000);
+const path = "/mcp";
+
+const server = http.createServer((req, res) => {
+  if (req.method === "GET" && req.url === "/health") {
+    sendJson(res, 200, { ok: true, server: SERVER_INFO });
+    return;
+  }
+
+  if (req.url !== path) {
+    sendJson(res, 404, { error: { message: "Not found" } });
+    return;
+  }
+
+  if (req.method !== "POST") {
+    sendJson(res, 405, { error: { message: "Method not allowed" } });
+    return;
+  }
+
+  let body = "";
+  req.setEncoding("utf8");
+  req.on("data", (chunk) => {
+    body += chunk;
+  });
+  req.on("end", () => {
+    const message = parseJson(body);
+    const response = handleRpc(message);
+    if (response.notification) {
+      res.writeHead(202);
+      res.end();
+      return;
+    }
+    if (response.error && !response.id) {
+      sendJson(res, 400, response);
+      return;
+    }
+    sendJson(res, 200, response);
+  });
+});
+
+server.listen(port, host, () => {
+  console.log(`[incident-monitoring] HTTP MCP bridge listening on http://${host}:${port}${path}`);
+});

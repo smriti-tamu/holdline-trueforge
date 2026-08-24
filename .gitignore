@@ -1,0 +1,10 @@
+node_modules/
+.node_modules.lock
+.grok/
+.vercel/
+artifacts/
+screenshots/
+*.log
+dist/
+build/
+.DS_Store
