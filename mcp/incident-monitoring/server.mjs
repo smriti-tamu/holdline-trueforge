@@ -298,24 +298,40 @@ function callTool(name, args) {
   }
   
   if (name === "rollback_deployment") {
-    const targetDeploy =
-      typeof args?.targetDeploy === "string" && args.targetDeploy.trim()
-        ? args.targetDeploy.trim()
-        : "9e10";
+  const supportedAlertId = TEST_ALERTS[0].alert;
 
-    return toolText(
-      "Simulated remediation result",
-      jsonText({
-        status: "simulated_success",
-        simulated: true,
-        action: `Rollback checkout deployment 4c21 to ${targetDeploy}`,
-        alert_id: alertId,
-        message:
-          "Mock rollback completed for demo purposes. No real production system was changed.",
-      }),
+  const requestedAlertId =
+    typeof args?.alertId === "string" ? args.alertId.trim() : "";
+
+  const targetDeploy =
+    typeof args?.targetDeploy === "string" && args.targetDeploy.trim()
+      ? args.targetDeploy.trim()
+      : "";
+
+  if (requestedAlertId !== supportedAlertId) {
+    throw new Error(
+      "Unsupported remediation: this mock rollback only supports the checkout alert for deploy 4c21.",
     );
   }
 
+  if (targetDeploy !== "9e10") {
+    throw new Error(
+      "Unsupported rollback target: this mock incident can only restore stable baseline 9e10.",
+    );
+  }
+
+  return toolText(
+    "Simulated remediation result",
+    jsonText({
+      status: "simulated_success",
+      simulated: true,
+      action: "Rollback checkout deployment 4c21 to 9e10",
+      alert_id: requestedAlertId,
+      message:
+        "Mock rollback completed for demo purposes. No real production system was changed.",
+    }),
+  );
+}
   throw new Error(`Unknown tool: ${name}`);
 }
 
