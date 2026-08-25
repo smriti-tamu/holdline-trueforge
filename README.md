@@ -85,3 +85,4 @@ npm run mcp:incident-monitoring:http
 
 - The HTTP bridge is local-only by default and uses `127.0.0.1:8000`.
 - If you want to deploy this integration outside your machine, you will need to host the bridge at a public URL and point TrueForge at that URL instead of `localhost`.
+- Code review is part of the build: substantive changes should land via GitHub pull request and be reviewed by Qodo before merge.
