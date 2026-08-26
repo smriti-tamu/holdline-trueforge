@@ -169,6 +169,30 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+    {
+    name: "rollback_deployment",
+    description:
+      "Simulate rolling back a deployment. This is a destructive demo action and requires explicit human approval before execution.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        alertId: {
+          type: "string",
+          description: "Exact alert ID or alert text being remediated.",
+        },
+        targetDeploy: {
+          type: "string",
+          description: "Known-good deployment to restore.",
+        },
+      },
+      required: ["alertId", "targetDeploy"],
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+    },
+  },
 ];
 
 function normalize(text) {
@@ -272,7 +296,42 @@ function callTool(name, args) {
   if (name === "get_trace") {
     return toolText("Trace", jsonText({ alert_id: alertId, traces: scenario.traces }));
   }
+  
+  if (name === "rollback_deployment") {
+  const supportedAlertId = TEST_ALERTS[0].alert;
 
+  const requestedAlertId =
+    typeof args?.alertId === "string" ? args.alertId.trim() : "";
+
+  const targetDeploy =
+    typeof args?.targetDeploy === "string" && args.targetDeploy.trim()
+      ? args.targetDeploy.trim()
+      : "";
+
+  if (requestedAlertId !== supportedAlertId) {
+    throw new Error(
+      "Unsupported remediation: this mock rollback only supports the checkout alert for deploy 4c21.",
+    );
+  }
+
+  if (targetDeploy !== "9e10") {
+    throw new Error(
+      "Unsupported rollback target: this mock incident can only restore stable baseline 9e10.",
+    );
+  }
+
+  return toolText(
+    "Simulated remediation result",
+    jsonText({
+      status: "simulated_success",
+      simulated: true,
+      action: "Rollback checkout deployment 4c21 to 9e10",
+      alert_id: requestedAlertId,
+      message:
+        "Mock rollback completed for demo purposes. No real production system was changed.",
+    }),
+  );
+}
   throw new Error(`Unknown tool: ${name}`);
 }
 
