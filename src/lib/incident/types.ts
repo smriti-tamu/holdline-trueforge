@@ -1,4 +1,4 @@
-export type StageId = 1 | 2 | 3 | 4 | 5;
+export type StageId = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 export type SessionStatus =
   | "running"
@@ -109,6 +109,8 @@ export const STAGE_LABELS: Record<StageId, string> = {
   3: "Diagnose",
   4: "Propose",
   5: "Approve → Act",
+  6: "Verify → Recovery",
+  7: "Resolve",
 };
 
 export const TEST_ALERTS = [

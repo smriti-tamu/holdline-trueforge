@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { HOLDLINE_SYSTEM_PROMPT } from "@/lib/incident/prompt";
 
 export type McpConnectionTestInput = {
   transport: "stdio" | "http";
@@ -313,6 +314,38 @@ async function loadAgentManifest() {
   return parsed;
 }
 
+async function loadTrueForgeManifest() {
+  const base = await loadAgentManifest();
+  if (!base || typeof base !== "object" || Array.isArray(base)) {
+    return {
+      model: {
+        name: "openrouter/openrouter-free",
+        params: { temperature: 0.1 },
+      },
+      instructions: HOLDLINE_SYSTEM_PROMPT,
+      mcp_servers: [
+        {
+          name: "incident-monitoring",
+          enable_tools: ["@all"],
+          require_approval_for_tools: ["rollback_deployment"],
+          preload: true,
+        },
+      ],
+      config: {
+        sandbox: { enabled: true },
+        generative_ui: { enabled: true },
+        ask_user_questions: { enabled: true },
+        dynamic_sub_agents: { enabled: true },
+        iteration_limit: 40,
+      },
+    };
+  }
+  return {
+    ...(base as Record<string, unknown>),
+    instructions: HOLDLINE_SYSTEM_PROMPT,
+  };
+}
+
 function normalizeAgentName(name: string) {
   const slug = name
     .trim()
@@ -330,24 +363,36 @@ async function runTrueForgeSync(input: TrueForgeSyncInput): Promise<TrueForgeSyn
   }
 
   try {
-    const manifest = await loadAgentManifest();
+    const manifest = await loadTrueForgeManifest();
     const agentName = normalizeAgentName(input.agentName);
-    const res = await fetch(`${base}/api/v1/agents`, {
-      method: "POST",
+    const listRes = await fetch(`${base}/api/v1/agents`, {
+      headers: { accept: "application/json" },
+    });
+    const listText = await listRes.text();
+    if (!listRes.ok) {
+      return { ok: false, errorMessage: listText || `HTTP ${listRes.status}` };
+    }
+
+    const list = JSON.parse(listText) as {
+      data?: Array<{ id?: string; name?: string }>;
+    };
+    const existing = list.data?.find((agent) => agent.name === agentName);
+    const endpoint = existing?.id
+      ? `${base}/api/v1/agents/${encodeURIComponent(existing.id)}`
+      : `${base}/api/v1/agents`;
+    const res = await fetch(endpoint, {
+      method: existing?.id ? "PUT" : "POST",
       headers: {
         "content-type": "application/json",
         accept: "application/json",
       },
-      body: JSON.stringify({
-        name: agentName,
-        manifest,
-      }),
+      body: JSON.stringify(existing?.id ? { manifest } : { name: agentName, manifest }),
     });
     const text = await res.text();
     if (!res.ok) {
       return { ok: false, errorMessage: text || `HTTP ${res.status}` };
     }
-    return { ok: true, created: true, agentName };
+    return { ok: true, created: !existing?.id, agentName };
   } catch (error) {
     return {
       ok: false,

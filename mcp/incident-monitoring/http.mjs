@@ -235,10 +235,13 @@ function toolText(title, body) {
   return `${title}\n\n${body}`;
 }
 
+let checkoutRecoveryActive = false;
+
 function callTool(name, args) {
   const { scenario, alertId } = resolveAlert(args);
 
   if (name === "get_alert") {
+    if (alertId === TEST_ALERTS[0].alert) checkoutRecoveryActive = false;
     return toolText(
       "Stage 1 - Alert Reception",
       jsonText({
@@ -253,10 +256,30 @@ function callTool(name, args) {
   }
 
   if (name === "query_metrics") {
+    if (checkoutRecoveryActive && alertId === TEST_ALERTS[0].alert) {
+      return toolText(
+        "Post-rollback metrics",
+        jsonText({
+          alert_id: alertId,
+          metrics:
+            "checkout.error_rate{region=us-east-1}\n  8.7% -> 0.4%\npayment.latency_p99\n  812ms -> 340ms\nrecovery_window\n  5m",
+        }),
+      );
+    }
     return toolText("Metrics", jsonText({ alert_id: alertId, metrics: scenario.metrics }));
   }
 
   if (name === "query_logs") {
+    if (checkoutRecoveryActive && alertId === TEST_ALERTS[0].alert) {
+      return toolText(
+        "Post-rollback logs",
+        jsonText({
+          alert_id: alertId,
+          logs:
+            "INFO checkout serving deploy=9e10\nNo new PaymentAdapter timeout errors in the last 5 minutes.",
+        }),
+      );
+    }
     return toolText("Logs", jsonText({ alert_id: alertId, logs: scenario.logs }));
   }
 
@@ -294,6 +317,8 @@ function callTool(name, args) {
       "Unsupported rollback target: this mock incident can only restore stable baseline 9e10.",
     );
   }
+
+  checkoutRecoveryActive = true;
 
   return toolText(
     "Simulated remediation result",

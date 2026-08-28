@@ -1,5 +1,6 @@
 import { uid } from "@/lib/utils";
 import { getPlaybook, type Playbook } from "./playbooks";
+import { STAGE_LABELS } from "./types";
 import type { IncidentSession, ScriptStep, TimelineEvent } from "./types";
 
 const cache = new Map<string, Playbook>();
@@ -183,16 +184,17 @@ export function appendHuman(session: IncidentSession, text: string): IncidentSes
 }
 
 export function replyToHuman(session: IncidentSession, text: string): IncidentSession {
+  const label = STAGE_LABELS[session.stage];
   const waiting = session.status === "waiting";
   const body = waiting
     ? `Stage 5 – Waiting for Approval\n\nI heard you, but I will not execute until you reply with “approve”, “yes”, or “go”.\n\nWrite lock: engaged.\n${text ? `On your note: I can clarify, but the proposed action is unchanged.` : ""}`
     : session.status === "running"
-      ? `Stage ${session.stage} – ${session.stage === 2 ? "Investigate" : session.stage === 1 ? "Alert Reception" : "in progress"}\n\nStill gathering evidence. I will not diagnose early and I will not touch production.`
+      ? `Stage ${session.stage} – ${label}\n\nStill gathering evidence. I will not diagnose early and I will not touch production.`
       : session.status === "executing"
-        ? "Stage 5 – Approve → Act\n\nExecution is in progress. I will confirm when it finishes."
+        ? `Stage ${session.stage} – ${label}\n\nExecution and verification are in progress. I will confirm when the incident is resolved.`
         : session.status === "closed"
           ? "This incident is closed. Resume it only if you need the record, or open a new alert."
-          : "Stage 5 – Held.\n\nWrite lock is still engaged. Reply approve if you want the proposed plan to run.";
+          : `Stage ${session.stage} – ${label}\n\nWrite lock is still engaged. Reply approve if you want the proposed plan to run.`;
 
   const event: TimelineEvent = {
     id: uid(),

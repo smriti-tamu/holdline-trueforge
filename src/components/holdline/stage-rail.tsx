@@ -2,11 +2,11 @@ import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { STAGE_LABELS, type IncidentSession, type StageId } from "@/lib/incident/types";
 
-const STAGES: StageId[] = [1, 2, 3, 4, 5];
+const STAGES: StageId[] = [1, 2, 3, 4, 5, 6, 7];
 
 export function StageRail({ session }: { session: IncidentSession }) {
   return (
-    <ol className="grid grid-cols-5 gap-1 sm:gap-2">
+    <ol className="grid grid-cols-7 gap-1 sm:gap-2">
       {STAGES.map((id) => {
         const done = session.stage > id || session.status === "closed";
         const current = session.stage === id && session.status !== "closed";
