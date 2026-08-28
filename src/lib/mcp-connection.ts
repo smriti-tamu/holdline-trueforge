@@ -1,5 +1,15 @@
 import { createServerFn } from "@tanstack/react-start";
 import { HOLDLINE_SYSTEM_PROMPT } from "@/lib/incident/prompt";
+import {
+  argumentsForTool,
+  bucketForTool,
+  extractTraceId,
+  type InvestigationToolName,
+} from "@/lib/incident/playbooks";
+import type { LiveToolResult } from "@/lib/incident/types";
+
+const ALLOWED_LOCAL_MCP_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+const ALLOWED_MCP_PATH = "/mcp";
 
 export type McpConnectionTestInput = {
   transport: "stdio" | "http";
@@ -27,6 +37,16 @@ export type TrueForgeSyncResult = {
   ok: boolean;
   created?: boolean;
   agentName?: string;
+  errorMessage?: string;
+};
+
+export type LiveIncidentInvestigationInput = {
+  alertId: string;
+};
+
+export type LiveIncidentInvestigationResult = {
+  ok: boolean;
+  tools: LiveToolResult[];
   errorMessage?: string;
 };
 
@@ -182,14 +202,260 @@ type JsonRpcResponse = {
   error?: { message?: string };
 };
 
-function parseJsonRpcResponse(text: string): JsonRpcResponse | null {
-  if (!text.trim()) return null;
+export function resolveIncidentMonitoringEndpoint(raw: string): string {
+  const value = raw.trim();
+  if (!value) throw new Error("Incident-monitoring endpoint is required.");
+
+  let url: URL;
   try {
-    const parsed = JSON.parse(text) as unknown;
+    url = new URL(value);
+  } catch {
+    throw new Error("Incident-monitoring endpoint must be a valid HTTP(S) URL.");
+  }
+
+  if (!/^https?:$/.test(url.protocol)) {
+    throw new Error("Incident-monitoring endpoint must use HTTP or HTTPS only.");
+  }
+
+  const pathname = url.pathname.replace(/\/+$/, "") || "/";
+  if (pathname !== ALLOWED_MCP_PATH) {
+    throw new Error("Incident-monitoring endpoint must target the /mcp path.");
+  }
+
+  const hostname = url.hostname.toLowerCase();
+  const isLocalFallback = hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1";
+  if (!isLocalFallback) {
+    throw new Error("Incident-monitoring endpoint must be a local allow-listed loopback URL.");
+  }
+
+  if (hostname === "0.0.0.0" || hostname === "::" || hostname === "[::]" || hostname.includes(".")) {
+    if (!ALLOWED_LOCAL_MCP_HOSTS.has(hostname)) {
+      throw new Error("Incident-monitoring endpoint must use loopback/localhost only.");
+    }
+  }
+
+
+  return url.toString();
+}
+
+export function parseJsonRpcPayload(text: string): JsonRpcResponse | null {
+  if (!text.trim()) return null;
+
+  const trimmed = text.trim();
+  const lines = trimmed.split(/\r?\n/);
+  const dataLines: string[] = [];
+  for (const line of lines) {
+    if (line.startsWith("data: ")) {
+      dataLines.push(line.slice("data: ".length));
+    } else if (line.startsWith("data:")) {
+      dataLines.push(line.slice("data:".length));
+    }
+  }
+
+  const payloadText = dataLines.length > 0 ? dataLines.join("\n") : trimmed;
+  try {
+    const parsed = JSON.parse(payloadText) as unknown;
     if (!parsed || typeof parsed !== "object") return null;
     return parsed as JsonRpcResponse;
   } catch {
     return null;
+  }
+}
+
+function parseJsonRpcResponse(text: string): JsonRpcResponse | null {
+  return parseJsonRpcPayload(text);
+}
+
+export function toolResultStatus(result: { isError?: boolean } | null | undefined): "ok" | "failed" | "skipped" {
+  if (!result || typeof result !== "object") return "skipped";
+  return result.isError === true ? "failed" : "ok";
+}
+
+function textFromToolResult(result: unknown): string {
+  if (!result || typeof result !== "object") return "Tool returned no readable result.";
+
+  const content = (result as { content?: Array<{ type?: string; text?: string }> }).content;
+  const text = content
+    ?.filter((part) => part.type === "text" && typeof part.text === "string")
+    .map((part) => part.text?.trim())
+    .filter(Boolean)
+    .join("\n\n");
+
+  return text || "Tool returned no readable result.";
+}
+
+function titleForLiveTool(tool: InvestigationToolName): string {
+  const titles: Record<InvestigationToolName, string> = {
+    get_alert: "Retrieve alert details",
+    query_metrics: "Read error-rate and latency metrics",
+    query_logs: "Read recent error logs",
+    list_deploys: "Review recent deployments",
+    get_trace: "Inspect trace evidence",
+    search_tickets: "Search related incidents and tickets",
+  };
+
+  return titles[tool];
+}
+
+async function runLiveMcpInvestigation(
+  input: LiveIncidentInvestigationInput,
+): Promise<LiveIncidentInvestigationResult> {
+  const endpoint = resolveIncidentMonitoringEndpoint(process.env.HOLDLINE_INCIDENT_MCP_URL ?? "http://127.0.0.1:8000/mcp");
+  const alertId = input.alertId.trim();
+
+  if (!alertId) {
+    return {
+      ok: false,
+      tools: [],
+      errorMessage: "An alert is required before an investigation can begin.",
+    };
+  }
+
+  let sessionId: string | null = null;
+  let nextId = 1;
+  const protocolVersion = "2025-03-26";
+  const headersBase: Record<string, string> = {
+    accept: "application/json, text/event-stream",
+    "content-type": "application/json",
+    "mcp-protocol-version": protocolVersion,
+  };
+
+  async function postJsonRpc(payload: unknown, expectResponse = true) {
+    const headers: Record<string, string> = { ...headersBase };
+    if (sessionId) headers["mcp-session-id"] = sessionId;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      const nextSessionId = response.headers.get("mcp-session-id")?.trim();
+      if (nextSessionId) sessionId = nextSessionId;
+
+      const text = await response.text();
+      const json = parseJsonRpcResponse(text);
+
+      if (expectResponse && (!json || json.error || !response.ok)) {
+        throw new Error(json?.error?.message ?? text ?? `HTTP ${response.status}`);
+      }
+
+      return json;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async function cleanupSession() {
+    if (!sessionId) return;
+    try {
+      await cleanupMcpSession(endpoint, sessionId);
+    } finally {
+      sessionId = null;
+    }
+  }
+
+  async function callTool(
+    tool: InvestigationToolName,
+    traceId?: string,
+  ): Promise<LiveToolResult> {
+    try {
+      const response = await postJsonRpc({
+        jsonrpc: "2.0",
+        id: nextId++,
+        method: "tools/call",
+        params: {
+          name: tool,
+          arguments: argumentsForTool(tool, alertId, traceId),
+        },
+      });
+
+      const result = (response as { result?: { isError?: boolean; content?: Array<{ type?: string; text?: string }> } } | null)?.result;
+      return {
+        tool,
+        title: titleForLiveTool(tool),
+        bucket: bucketForTool(tool),
+        response: textFromToolResult(result),
+        status: toolResultStatus(result),
+      };
+    } catch (error) {
+      return {
+        tool,
+        title: titleForLiveTool(tool),
+        bucket: bucketForTool(tool),
+        response: error instanceof Error ? error.message : String(error),
+        status: "failed",
+      };
+    }
+  }
+
+  try {
+    const initialize = await postJsonRpc({
+      jsonrpc: "2.0",
+      id: nextId++,
+      method: "initialize",
+      params: {
+        protocolVersion,
+        clientInfo: { name: "holdline-desk", version: "1.0.0" },
+        capabilities: { tools: {} },
+      },
+    });
+
+    if (!initialize?.result) {
+      throw new Error(initialize?.error?.message ?? "MCP initialize failed.");
+    }
+
+    await postJsonRpc(
+      {
+        jsonrpc: "2.0",
+        method: "notifications/initialized",
+        params: {},
+      },
+      false,
+    );
+
+    try {
+      const alert = await callTool("get_alert");
+
+      const [metrics, logs, deploys] = await Promise.all([
+        callTool("query_metrics"),
+        callTool("query_logs"),
+        callTool("list_deploys"),
+      ]);
+
+      const traceId = extractTraceId(logs.response);
+
+      const trace: LiveToolResult = traceId
+        ? await callTool("get_trace", traceId)
+        : {
+            tool: "get_trace",
+            title: titleForLiveTool("get_trace"),
+            bucket: bucketForTool("get_trace"),
+            response: "No trace ID was found in the returned logs, so trace lookup was skipped.",
+            status: "skipped",
+          };
+
+      const tickets = await callTool("search_tickets");
+
+      return {
+        ok: true,
+        tools: [alert, metrics, logs, deploys, trace, tickets],
+      };
+    } finally {
+      await cleanupSession();
+    }
+  } catch (error) {
+    await cleanupSession();
+    return {
+      ok: false,
+      tools: [],
+      errorMessage: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
@@ -400,6 +666,26 @@ async function runTrueForgeSync(input: TrueForgeSyncInput): Promise<TrueForgeSyn
     };
   }
 }
+
+export async function cleanupMcpSession(endpoint: string, sessionId: string) {
+  const target = endpoint.trim();
+  if (!target || !sessionId) return;
+
+  try {
+    await fetch(target, {
+      method: "DELETE",
+      headers: {
+        "mcp-session-id": sessionId,
+      },
+    });
+  } catch {
+    // Session cleanup is best-effort and must not hide original investigation errors.
+  }
+}
+
+export const runLiveIncidentInvestigation = createServerFn({ method: "POST" })
+  .validator((input: LiveIncidentInvestigationInput) => input)
+  .handler(async ({ data }) => runLiveMcpInvestigation(data));
 
 export const testMcpConnection = createServerFn({ method: "POST" })
   .validator((input: McpConnectionTestInput) => input)

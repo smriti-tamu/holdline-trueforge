@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { DEFAULT_HOLDLINE_CONNECTION, type HoldlineConnectionConfig } from "@/lib/holdline-connection";
 import { syncTrueForgeAgent, testMcpConnection } from "@/lib/mcp-connection";
 import { useHoldline } from "@/store/holdline";
-import { cn, formatClock } from "@/lib/utils";
+import { formatClock } from "@/lib/utils";
 
 export function ConnectionPanel() {
   const connection = useHoldline((s) => s.connection);
@@ -27,16 +27,10 @@ export function ConnectionPanel() {
   }, [connection, open]);
 
   const summary = useMemo(() => {
-    const bridge =
-      draft.mcpTransport === "http"
-        ? "TrueForge API sync"
-        : draft.liveEnabled
-          ? "live bridge armed"
-          : "local config";
     const updated =
       connection.lastTestedAt != null ? ` · tested ${formatClock(connection.lastTestedAt)}` : "";
-    return `${draft.modelProvider} / ${draft.modelName} · ${draft.mcpServerName} · ${bridge}${updated}`;
-  }, [connection.lastTestedAt, draft.liveEnabled, draft.mcpServerName, draft.modelName, draft.modelProvider]);
+    return `${draft.modelProvider} / ${draft.modelName} · ${draft.mcpServerName} · live MCP evidence${updated}`;
+  }, [connection.lastTestedAt, draft.mcpServerName, draft.modelName, draft.modelProvider]);
 
   async function runTest() {
     setTesting(true);
@@ -49,7 +43,7 @@ export function ConnectionPanel() {
           argumentsText: draft.mcpArguments,
           alertId: draft.mcpAlertId,
           serverName: draft.mcpServerName,
-          url: draft.mcpUrl,
+          url: "http://127.0.0.1:8000/mcp",
         },
       });
       if (result.ok) {
@@ -88,12 +82,12 @@ export function ConnectionPanel() {
     try {
       const result = await syncTrueForgeAgent({
         data: {
-          url: draft.mcpUrl,
+          url: draft.trueForgeUrl,
           agentName: draft.profileName,
         },
       });
       if (result.ok) {
-        const message = `Synced ${result.agentName ?? draft.profileName} to TrueForge at ${draft.mcpUrl.trim() || "the configured URL"}.`;
+        const message = `Synced ${result.agentName ?? draft.profileName} to TrueForge at ${draft.trueForgeUrl.trim() || "the configured URL"}.`;
         setTestMessage(message);
         updateConnection({
           ...draft,
@@ -128,8 +122,7 @@ export function ConnectionPanel() {
         <div className="min-w-0">
           <h2 className="text-xs tracking-wide text-muted uppercase">Connections</h2>
           <p className="mt-1 max-w-2xl text-sm text-muted">
-            Point Holdline at a model, MCP server, or other bridge you want to test. This is the
-            settings surface for the live harness.
+            Holdline uses the local incident-monitoring bridge for read-only investigation evidence.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -146,9 +139,7 @@ export function ConnectionPanel() {
       <div className="mt-4 grid gap-2 sm:grid-cols-3">
         <div className="rounded-sm bg-subtle p-3">
           <p className="text-[11px] uppercase tracking-wide text-faint">Model</p>
-          <p className="mt-1 text-sm text-fg">
-            {connection.modelProvider} / {connection.modelName}
-          </p>
+          <p className="mt-1 text-sm text-fg">{connection.modelProvider} / {connection.modelName}</p>
         </div>
         <div className="rounded-sm bg-subtle p-3">
           <p className="text-[11px] uppercase tracking-wide text-faint">MCP Server</p>
@@ -156,7 +147,7 @@ export function ConnectionPanel() {
         </div>
         <div className="rounded-sm bg-subtle p-3">
           <p className="text-[11px] uppercase tracking-wide text-faint">Mode</p>
-          <p className="mt-1 text-sm text-fg">{connection.liveEnabled ? "Live bridge" : "Local demo"}</p>
+          <p className="mt-1 text-sm text-fg">Live bridge</p>
         </div>
       </div>
 
@@ -170,8 +161,7 @@ export function ConnectionPanel() {
         <DialogContent className="w-[min(100%-1rem,46rem)]">
           <DialogTitle>Connections</DialogTitle>
           <DialogDescription>
-            Save the model/provider settings, test the local MCP server command, or sync the
-            Holdline agent into TrueForge over HTTP.
+            Update the local Holdline profile and optional TrueForge sync target.
           </DialogDescription>
 
           <div className="mt-4 grid gap-3">
@@ -181,7 +171,7 @@ export function ConnectionPanel() {
                 <Input
                   value={draft.profileName}
                   onChange={(e) => setDraft((cur) => ({ ...cur, profileName: e.target.value }))}
-                  placeholder="TrueForge / Holdline"
+                  placeholder="Holdline"
                 />
               </label>
               <label className="flex flex-col gap-1.5 text-xs tracking-wide text-muted uppercase">
@@ -189,7 +179,7 @@ export function ConnectionPanel() {
                 <Input
                   value={draft.modelProvider}
                   onChange={(e) => setDraft((cur) => ({ ...cur, modelProvider: e.target.value }))}
-                  placeholder="ollama"
+                  placeholder="openrouter"
                 />
               </label>
             </div>
@@ -200,21 +190,14 @@ export function ConnectionPanel() {
                 <Input
                   value={draft.modelName}
                   onChange={(e) => setDraft((cur) => ({ ...cur, modelName: e.target.value }))}
-                  placeholder="qwen3-4b"
+                  placeholder="openrouter-free"
                 />
               </label>
               <label className="flex flex-col gap-1.5 text-xs tracking-wide text-muted uppercase">
-                <span>Live Mode</span>
-                <button
-                  type="button"
-                  onClick={() => setDraft((cur) => ({ ...cur, liveEnabled: !cur.liveEnabled }))}
-                  className={cn(
-                    "h-11 rounded-sm border px-3 text-left text-sm shadow-[var(--shadow-border)]",
-                    draft.liveEnabled ? "border-ring/70 bg-ring/10 text-fg" : "border-border bg-elevated text-muted",
-                  )}
-                >
-                  {draft.liveEnabled ? "Live bridge enabled" : "Local demo mode"}
-                </button>
+                <span>Transport</span>
+                <div className="flex h-11 items-center rounded-sm border border-border bg-subtle px-3 text-sm text-fg shadow-[var(--shadow-border)]">
+                  HTTP local bridge
+                </div>
               </label>
             </div>
 
@@ -228,76 +211,33 @@ export function ConnectionPanel() {
                 />
               </label>
               <label className="flex flex-col gap-1.5 text-xs tracking-wide text-muted uppercase">
-                <span>Transport</span>
-                <select
-                  value={draft.mcpTransport}
-                  onChange={(e) =>
-                    setDraft((cur) => ({
-                      ...cur,
-                      mcpTransport: e.target.value === "http" ? "http" : "stdio",
-                    }))
-                  }
-                  className="h-11 w-full rounded-sm bg-elevated px-3 text-sm text-fg shadow-[var(--shadow-border)] outline-none focus-visible:ring-2 focus-visible:ring-ring/70"
-                >
-                  <option value="stdio">stdio</option>
-                  <option value="http">http (TrueForge)</option>
-                </select>
-              </label>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="flex flex-col gap-1.5 text-xs tracking-wide text-muted uppercase">
-                <span>MCP Command</span>
+                <span>TrueForge URL</span>
                 <Input
-                  value={draft.mcpCommand}
-                  onChange={(e) => setDraft((cur) => ({ ...cur, mcpCommand: e.target.value }))}
-                  placeholder="node"
-                  disabled={draft.mcpTransport === "http"}
-                />
-              </label>
-              <label className="flex flex-col gap-1.5 text-xs tracking-wide text-muted uppercase">
-                <span>MCP Arguments</span>
-                <Input
-                  value={draft.mcpArguments}
-                  onChange={(e) => setDraft((cur) => ({ ...cur, mcpArguments: e.target.value }))}
-                  placeholder="mcp/incident-monitoring/server.mjs"
-                  disabled={draft.mcpTransport === "http"}
+                  value={draft.trueForgeUrl}
+                  onChange={(e) => setDraft((cur) => ({ ...cur, trueForgeUrl: e.target.value }))}
+                  placeholder="https://trueforge.example.com"
                 />
               </label>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="flex flex-col gap-1.5 text-xs tracking-wide text-muted uppercase">
-                <span>MCP URL</span>
-                <Input
-                  value={draft.mcpUrl}
-                  onChange={(e) => setDraft((cur) => ({ ...cur, mcpUrl: e.target.value }))}
-                  placeholder="http://localhost:8790"
-                  disabled={draft.mcpTransport === "stdio"}
-                />
-                <span className="text-[11px] normal-case tracking-normal text-faint">
-                  Use the TrueForge base URL when transport is http.
-                </span>
-              </label>
-              <label className="flex flex-col gap-1.5 text-xs tracking-wide text-muted uppercase">
-                <span>Test Alert</span>
+                <span>Alert text for MCP test</span>
                 <Input
                   value={draft.mcpAlertId}
                   onChange={(e) => setDraft((cur) => ({ ...cur, mcpAlertId: e.target.value }))}
-                  placeholder="Checkout error rate jumped..."
+                  placeholder="Describe the alert to investigate"
+                />
+              </label>
+              <label className="flex flex-col gap-1.5 text-xs tracking-wide text-muted uppercase">
+                <span>Notes</span>
+                <Input
+                  value={draft.notes}
+                  onChange={(e) => setDraft((cur) => ({ ...cur, notes: e.target.value }))}
+                  placeholder="Any investigation notes"
                 />
               </label>
             </div>
-
-            <label className="flex flex-col gap-1.5 text-xs tracking-wide text-muted uppercase">
-              <span>Notes</span>
-              <Textarea
-                value={draft.notes}
-                onChange={(e) => setDraft((cur) => ({ ...cur, notes: e.target.value }))}
-                rows={3}
-                placeholder="Keep any bridge notes here."
-              />
-            </label>
           </div>
 
           <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
@@ -318,29 +258,24 @@ export function ConnectionPanel() {
               <Button
                 type="button"
                 variant="outline"
-                onClick={draft.mcpTransport === "http" ? runSyncToTrueForge : runTest}
-                disabled={
-                  draft.mcpTransport === "http"
-                    ? syncing || !draft.mcpUrl.trim() || !draft.profileName.trim()
-                    : testing || !draft.mcpServerName.trim() || !draft.mcpCommand.trim()
-                }
+                onClick={runTest}
+                disabled={testing || !draft.mcpServerName.trim()}
               >
                 <ShieldCheck className="mr-2 size-4" />
-                {draft.mcpTransport === "http"
-                  ? syncing
-                    ? "Syncing…"
-                    : "Sync to TrueForge"
-                  : testing
-                    ? "Testing…"
-                    : "Test connection"}
+                {testing ? "Testing…" : "Test MCP connection"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={runSyncToTrueForge}
+                disabled={syncing || !draft.trueForgeUrl.trim() || !draft.profileName.trim()}
+              >
+                <ShieldCheck className="mr-2 size-4" />
+                {syncing ? "Syncing…" : "Sync to TrueForge"}
               </Button>
             </div>
             <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => setOpen(false)}
-              >
+              <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
                 Close
               </Button>
               <Button

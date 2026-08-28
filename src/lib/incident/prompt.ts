@@ -66,8 +66,8 @@ export function approvalGateText(input: {
     `Proposed action: ${input.proposedAction}`,
     `Risk level: ${input.risk}`,
     `Rollback plan: ${input.rollback}`,
-    "Post-action verification: I will re-check metrics and logs before closing the incident.",
+    "Action handoff: Holdline is read-only and cannot execute this plan.",
     "",
-    "Do you approve this action? Please reply with ‘approve’ or ‘yes’ to proceed. I will not execute anything until you explicitly approve.",
+    "Open the Holdline agent in TrueForge to request explicit approval and use its separate Allow/Deny tool gate.",
   ].join("\n");
 }
