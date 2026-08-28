@@ -16,14 +16,12 @@ export function IncidentDesk({
   onApprove,
   onReject,
   onSend,
-  onFastForward,
 }: {
   session: IncidentSession;
   onLeave: () => void;
   onApprove: () => void;
   onReject: () => void;
   onSend: (text: string) => void;
-  onFastForward: () => void;
 }) {
   const locked = session.writeLock === "engaged";
   const connection = useHoldline((s) => s.connection);
@@ -56,7 +54,7 @@ export function IncidentDesk({
           title="Current model and MCP bridge settings from the Holdline connections panel"
         >
           {connection.modelProvider} / {connection.modelName} · {connection.mcpServerName}
-          {connection.mcpTransport === "http" ? " · TrueForge API" : ""}
+          {connection.mcpTransport === "http" ? " · Live MCP" : ""}
         </span>
         <Button variant="ghost" size="sm" onClick={onLeave}>
           Sessions
@@ -70,13 +68,8 @@ export function IncidentDesk({
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1.2fr)_minmax(18rem,0.8fr)]">
         <section className="flex min-h-0 flex-col gap-3 px-4 py-4">
           <div className="flex items-center justify-between gap-2">
-            <h2 className="text-xs tracking-wide text-muted uppercase">Investigation</h2>
-            {session.status === "running" ? (
-              <Button variant="ghost" size="sm" onClick={onFastForward}>
-                Fast-forward
-              </Button>
-            ) : null}
-          </div>
+  <h2 className="text-xs tracking-wide text-muted uppercase">Live investigation</h2>
+</div>
           <Timeline session={session} />
           {session.status === "rejected" ? (
             <div className="flex flex-col gap-3 rounded-md bg-subtle px-3 py-3 sm:flex-row sm:items-center">

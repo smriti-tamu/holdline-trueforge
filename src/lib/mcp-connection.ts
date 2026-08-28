@@ -1,5 +1,12 @@
 import { createServerFn } from "@tanstack/react-start";
 import { HOLDLINE_SYSTEM_PROMPT } from "@/lib/incident/prompt";
+import {
+  argumentsForTool,
+  bucketForTool,
+  extractTraceId,
+  type InvestigationToolName,
+} from "@/lib/incident/playbooks";
+import type { LiveToolResult } from "@/lib/incident/types";
 
 export type McpConnectionTestInput = {
   transport: "stdio" | "http";
@@ -27,6 +34,17 @@ export type TrueForgeSyncResult = {
   ok: boolean;
   created?: boolean;
   agentName?: string;
+  errorMessage?: string;
+};
+
+export type LiveIncidentInvestigationInput = {
+  url: string;
+  alertId: string;
+};
+
+export type LiveIncidentInvestigationResult = {
+  ok: boolean;
+  tools: LiveToolResult[];
   errorMessage?: string;
 };
 
@@ -190,6 +208,187 @@ function parseJsonRpcResponse(text: string): JsonRpcResponse | null {
     return parsed as JsonRpcResponse;
   } catch {
     return null;
+  }
+}
+
+function textFromToolResult(result: unknown): string {
+  if (!result || typeof result !== "object") return "Tool returned no readable result.";
+
+  const content = (result as { content?: Array<{ type?: string; text?: string }> }).content;
+  const text = content
+    ?.filter((part) => part.type === "text" && typeof part.text === "string")
+    .map((part) => part.text?.trim())
+    .filter(Boolean)
+    .join("\n\n");
+
+  return text || "Tool returned no readable result.";
+}
+
+function titleForLiveTool(tool: InvestigationToolName): string {
+  const titles: Record<InvestigationToolName, string> = {
+    get_alert: "Retrieve alert details",
+    query_metrics: "Read error-rate and latency metrics",
+    query_logs: "Read recent error logs",
+    list_deploys: "Review recent deployments",
+    get_trace: "Inspect trace evidence",
+    search_tickets: "Search related incidents and tickets",
+  };
+
+  return titles[tool];
+}
+
+async function runLiveMcpInvestigation(
+  input: LiveIncidentInvestigationInput,
+): Promise<LiveIncidentInvestigationResult> {
+  const endpoint = input.url.trim();
+  const alertId = input.alertId.trim();
+
+  if (!endpoint) {
+    return {
+      ok: false,
+      tools: [],
+      errorMessage: "MCP URL is required. Use http://127.0.0.1:8000/mcp for the local demo.",
+    };
+  }
+
+  if (!alertId) {
+    return {
+      ok: false,
+      tools: [],
+      errorMessage: "An alert is required before an investigation can begin.",
+    };
+  }
+
+  let sessionId: string | null = null;
+  let nextId = 1;
+  const protocolVersion = "2025-03-26";
+  const headersBase: Record<string, string> = {
+    accept: "application/json, text/event-stream",
+    "content-type": "application/json",
+    "mcp-protocol-version": protocolVersion,
+  };
+
+  async function postJsonRpc(payload: unknown, expectResponse = true) {
+    const headers: Record<string, string> = { ...headersBase };
+    if (sessionId) headers["mcp-session-id"] = sessionId;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      const nextSessionId = response.headers.get("mcp-session-id")?.trim();
+      if (nextSessionId) sessionId = nextSessionId;
+
+      const text = await response.text();
+      const json = parseJsonRpcResponse(text);
+
+      if (expectResponse && (!json || json.error || !response.ok)) {
+        throw new Error(json?.error?.message ?? text ?? `HTTP ${response.status}`);
+      }
+
+      return json;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async function callTool(
+    tool: InvestigationToolName,
+    traceId?: string,
+  ): Promise<LiveToolResult> {
+    try {
+      const response = await postJsonRpc({
+        jsonrpc: "2.0",
+        id: nextId++,
+        method: "tools/call",
+        params: {
+          name: tool,
+          arguments: argumentsForTool(tool, alertId, traceId),
+        },
+      });
+
+      return {
+        tool,
+        title: titleForLiveTool(tool),
+        bucket: bucketForTool(tool),
+        response: textFromToolResult(response?.result),
+        status: "ok",
+      };
+    } catch (error) {
+      return {
+        tool,
+        title: titleForLiveTool(tool),
+        bucket: bucketForTool(tool),
+        response: error instanceof Error ? error.message : String(error),
+        status: "failed",
+      };
+    }
+  }
+
+  try {
+    const initialize = await postJsonRpc({
+      jsonrpc: "2.0",
+      id: nextId++,
+      method: "initialize",
+      params: {
+        protocolVersion,
+        clientInfo: { name: "holdline-desk", version: "1.0.0" },
+        capabilities: { tools: {} },
+      },
+    });
+
+    if (!initialize?.result) {
+      throw new Error(initialize?.error?.message ?? "MCP initialize failed.");
+    }
+
+    await postJsonRpc(
+      {
+        jsonrpc: "2.0",
+        method: "notifications/initialized",
+        params: {},
+      },
+      false,
+    );
+
+    const alert = await callTool("get_alert");
+
+    const [metrics, logs, deploys] = await Promise.all([
+      callTool("query_metrics"),
+      callTool("query_logs"),
+      callTool("list_deploys"),
+    ]);
+
+    const traceId = extractTraceId(logs.response);
+
+    const trace: LiveToolResult = traceId
+      ? await callTool("get_trace", traceId)
+      : {
+          tool: "get_trace",
+          title: titleForLiveTool("get_trace"),
+          bucket: bucketForTool("get_trace"),
+          response: "No trace ID was found in the returned logs, so trace lookup was skipped.",
+          status: "skipped",
+        };
+
+    const tickets = await callTool("search_tickets");
+
+    return {
+      ok: true,
+      tools: [alert, metrics, logs, deploys, trace, tickets],
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      tools: [],
+      errorMessage: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
@@ -400,6 +599,10 @@ async function runTrueForgeSync(input: TrueForgeSyncInput): Promise<TrueForgeSyn
     };
   }
 }
+
+export const runLiveIncidentInvestigation = createServerFn({ method: "POST" })
+  .validator((input: LiveIncidentInvestigationInput) => input)
+  .handler(async ({ data }) => runLiveMcpInvestigation(data));
 
 export const testMcpConnection = createServerFn({ method: "POST" })
   .validator((input: McpConnectionTestInput) => input)

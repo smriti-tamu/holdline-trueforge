@@ -18,7 +18,6 @@ function Home() {
   const approve = useHoldline((s) => s.approve);
   const reject = useHoldline((s) => s.reject);
   const sendHuman = useHoldline((s) => s.sendHuman);
-  const fastForwardActive = useHoldline((s) => s.fastForwardActive);
 
   useEffect(() => {
     const result = useHoldline.persist.rehydrate();
@@ -43,7 +42,6 @@ function Home() {
           onApprove={() => approve("approve")}
           onReject={reject}
           onSend={sendHuman}
-          onFastForward={fastForwardActive}
         />
       ) : (
         <HomeDesk sessions={sessions} onStart={startIncident} onResume={resume} />

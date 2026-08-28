@@ -27,12 +27,7 @@ export function ConnectionPanel() {
   }, [connection, open]);
 
   const summary = useMemo(() => {
-    const bridge =
-      draft.mcpTransport === "http"
-        ? "TrueForge API sync"
-        : draft.liveEnabled
-          ? "live bridge armed"
-          : "local config";
+    const bridge = draft.liveEnabled ? "live MCP evidence" : "local configuration";
     const updated =
       connection.lastTestedAt != null ? ` · tested ${formatClock(connection.lastTestedAt)}` : "";
     return `${draft.modelProvider} / ${draft.modelName} · ${draft.mcpServerName} · ${bridge}${updated}`;
@@ -88,12 +83,12 @@ export function ConnectionPanel() {
     try {
       const result = await syncTrueForgeAgent({
         data: {
-          url: draft.mcpUrl,
+          url: draft.trueForgeUrl,
           agentName: draft.profileName,
         },
       });
       if (result.ok) {
-        const message = `Synced ${result.agentName ?? draft.profileName} to TrueForge at ${draft.mcpUrl.trim() || "the configured URL"}.`;
+        const message = `Synced ${result.agentName ?? draft.profileName} to TrueForge at ${draft.trueForgeUrl.trim() || "the configured URL"}.`;
         setTestMessage(message);
         updateConnection({
           ...draft,
@@ -240,7 +235,7 @@ export function ConnectionPanel() {
                   className="h-11 w-full rounded-sm bg-elevated px-3 text-sm text-fg shadow-[var(--shadow-border)] outline-none focus-visible:ring-2 focus-visible:ring-ring/70"
                 >
                   <option value="stdio">stdio</option>
-                  <option value="http">http (TrueForge)</option>
+                  <option value="http">http (local MCP bridge)</option>
                 </select>
               </label>
             </div>
@@ -266,28 +261,41 @@ export function ConnectionPanel() {
               </label>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="flex flex-col gap-1.5 text-xs tracking-wide text-muted uppercase">
-                <span>MCP URL</span>
-                <Input
-                  value={draft.mcpUrl}
-                  onChange={(e) => setDraft((cur) => ({ ...cur, mcpUrl: e.target.value }))}
-                  placeholder="http://localhost:8790"
-                  disabled={draft.mcpTransport === "stdio"}
-                />
-                <span className="text-[11px] normal-case tracking-normal text-faint">
-                  Use the TrueForge base URL when transport is http.
-                </span>
-              </label>
-              <label className="flex flex-col gap-1.5 text-xs tracking-wide text-muted uppercase">
-                <span>Test Alert</span>
-                <Input
-                  value={draft.mcpAlertId}
-                  onChange={(e) => setDraft((cur) => ({ ...cur, mcpAlertId: e.target.value }))}
-                  placeholder="Checkout error rate jumped..."
-                />
-              </label>
-            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+  <label className="flex flex-col gap-1.5 text-xs tracking-wide text-muted uppercase">
+    <span>MCP Bridge URL</span>
+    <Input
+      value={draft.mcpUrl}
+      onChange={(e) => setDraft((cur) => ({ ...cur, mcpUrl: e.target.value }))}
+      placeholder="http://127.0.0.1:8000/mcp"
+      disabled={draft.mcpTransport === "stdio"}
+    />
+    <span className="text-[11px] normal-case tracking-normal text-faint">
+      Local read-only incident-monitoring MCP endpoint.
+    </span>
+  </label>
+
+  <label className="flex flex-col gap-1.5 text-xs tracking-wide text-muted uppercase">
+    <span>TrueForge URL</span>
+    <Input
+      value={draft.trueForgeUrl}
+      onChange={(e) => setDraft((cur) => ({ ...cur, trueForgeUrl: e.target.value }))}
+      placeholder="http://localhost:8790"
+    />
+    <span className="text-[11px] normal-case tracking-normal text-faint">
+      Used only when syncing the agent to TrueForge.
+    </span>
+  </label>
+
+  <label className="flex flex-col gap-1.5 text-xs tracking-wide text-muted uppercase">
+    <span>Test Alert</span>
+    <Input
+      value={draft.mcpAlertId}
+      onChange={(e) => setDraft((cur) => ({ ...cur, mcpAlertId: e.target.value }))}
+      placeholder="Checkout error rate jumped..."
+    />
+  </label>
+</div>
 
             <label className="flex flex-col gap-1.5 text-xs tracking-wide text-muted uppercase">
               <span>Notes</span>
@@ -321,7 +329,7 @@ export function ConnectionPanel() {
                 onClick={draft.mcpTransport === "http" ? runSyncToTrueForge : runTest}
                 disabled={
                   draft.mcpTransport === "http"
-                    ? syncing || !draft.mcpUrl.trim() || !draft.profileName.trim()
+                    ? syncing || !draft.trueForgeUrl.trim() || !draft.profileName.trim()
                     : testing || !draft.mcpServerName.trim() || !draft.mcpCommand.trim()
                 }
               >

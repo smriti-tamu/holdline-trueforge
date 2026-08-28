@@ -1,6 +1,13 @@
 export type StageId = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
-export type SessionStatus = "running" | "waiting" | "executing" | "parked" | "closed" | "rejected";
+export type SessionStatus =
+  | "running"
+  | "waiting"
+  | "executing"
+  | "parked"
+  | "closed"
+  | "rejected"
+  | "failed";
 
 export type WriteLock = "engaged" | "released";
 
@@ -20,7 +27,13 @@ export type EventKind =
 
 export type EventStatus = "running" | "ok" | "blocked" | "failed";
 
-export type EvidenceBucket = "metrics" | "logs" | "deploys" | "traces" | "tickets" | "sandbox";
+export type EvidenceBucket =
+  | "metrics"
+  | "logs"
+  | "deploys"
+  | "traces"
+  | "tickets"
+  | "sandbox";
 
 export type TimelineEvent = {
   id: string;
@@ -58,24 +71,17 @@ export type ExtractedFields = {
   extra: Record<string, string>;
 };
 
-export type ScriptStep = {
-  delayMs: number;
-  kind: EventKind;
+export type LiveToolResult = {
+  tool: string;
   title: string;
-  body?: string;
-  tool?: string;
-  subagent?: string;
-  bucket?: EvidenceBucket;
-  status?: EventStatus;
-  stage?: StageId;
-  patch?: {
-    stage?: StageId;
-    status?: SessionStatus;
-    writeLock?: WriteLock;
-    diagnosis?: Diagnosis;
-    proposal?: Proposal;
-    extracted?: ExtractedFields;
-  };
+  bucket: EvidenceBucket;
+  response: string;
+  status: "ok" | "failed" | "skipped";
+};
+
+export type LiveInvestigation = {
+  tools: LiveToolResult[];
+  traceId?: string;
 };
 
 export type IncidentSession = {
@@ -83,19 +89,18 @@ export type IncidentSession = {
   createdAt: number;
   updatedAt: number;
   alert: string;
-  playbookId: string;
   title: string;
   stage: StageId;
   status: SessionStatus;
   writeLock: WriteLock;
   extracted: ExtractedFields;
+  investigation?: LiveInvestigation;
   diagnosis?: Diagnosis;
   proposal?: Proposal;
   events: TimelineEvent[];
-  playhead: number;
-  execHead: number;
   approvedAt?: number;
   approvedVia?: string;
+  errorMessage?: string;
 };
 
 export const STAGE_LABELS: Record<StageId, string> = {
