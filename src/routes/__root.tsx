@@ -15,7 +15,7 @@ export const Route = createRootRoute({
       {
         name: "description",
         content:
-          "Holdline is a five-stage incident responder. Investigate, diagnose, propose — then wait for the human.",
+          "Holdline is a seven-stage incident responder. It investigates, diagnoses, proposes, acts, verifies recovery, and resolves only after the evidence is clear.",
       },
     ],
     links: [

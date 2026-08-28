@@ -15,11 +15,13 @@ export function Composer({
   const placeholder =
     session.status === "waiting"
       ? "Type approve, yes, go — or ask a question"
-      : session.status === "closed"
-        ? "Incident closed"
-        : session.status === "rejected"
-          ? "Held. Type approve to run the plan, or leave a note"
-          : "Message the responder";
+      : session.status === "parked"
+        ? "Add new evidence or a note"
+        : session.status === "closed"
+          ? "Incident closed"
+          : session.status === "rejected"
+            ? "Held. Type approve to run the plan, or leave a note"
+            : "Message the responder";
 
   return (
     <form

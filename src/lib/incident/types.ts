@@ -1,11 +1,6 @@
-export type StageId = 1 | 2 | 3 | 4 | 5;
+export type StageId = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
-export type SessionStatus =
-  | "running"
-  | "waiting"
-  | "executing"
-  | "closed"
-  | "rejected";
+export type SessionStatus = "running" | "waiting" | "executing" | "parked" | "closed" | "rejected";
 
 export type WriteLock = "engaged" | "released";
 
@@ -109,6 +104,8 @@ export const STAGE_LABELS: Record<StageId, string> = {
   3: "Diagnose",
   4: "Propose",
   5: "Approve → Act",
+  6: "Verify → Recovery",
+  7: "Resolve",
 };
 
 export const TEST_ALERTS = [
@@ -125,23 +122,20 @@ export const TEST_ALERTS = [
     severity: "SEV-1" as const,
     service: "payment",
     blurb: "502s on 40% of requests since 14:22 UTC",
-    alert:
-      "Payment service is returning 502s for 40% of requests. Started at 14:22 UTC.",
+    alert: "Payment service is returning 502s for 40% of requests. Started at 14:22 UTC.",
   },
   {
     id: "recs",
     severity: "SEV-2" as const,
     service: "recommendation",
     blurb: "CPU 97%, p99 latency 4.2s",
-    alert:
-      "CPU on the recommendation service is at 97% and p99 latency is 4.2s.",
+    alert: "CPU on the recommendation service is at 97% and p99 latency is 4.2s.",
   },
   {
     id: "auth",
     severity: "SEV-1" as const,
     service: "auth",
     blurb: "Critical vuln in auth library deployed 45m ago",
-    alert:
-      "New critical vulnerability flagged in the auth library we deployed 45 minutes ago.",
+    alert: "New critical vulnerability flagged in the auth library we deployed 45 minutes ago.",
   },
 ] as const;

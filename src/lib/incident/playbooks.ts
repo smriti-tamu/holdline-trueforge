@@ -1,11 +1,5 @@
 import { approvalGateText } from "./prompt";
-import type {
-  Diagnosis,
-  ExtractedFields,
-  Proposal,
-  ScriptStep,
-  StageId,
-} from "./types";
+import type { Diagnosis, ExtractedFields, Proposal, ScriptStep, StageId } from "./types";
 
 export type Playbook = {
   id: string;
@@ -27,6 +21,8 @@ function stage(id: StageId, extra?: string): ScriptStep {
     3: "Stage 3 – Diagnose",
     4: "Stage 4 – Propose",
     5: "Stage 5 – Waiting for Approval",
+    6: "Stage 6 – Verify → Recovery",
+    7: "Stage 7 – Resolve",
   };
   return {
     delayMs: 280,
@@ -132,6 +128,9 @@ function gateStep(diagnosis: Diagnosis, proposal: Proposal): ScriptStep {
     title: "Stage 5 – Waiting for Approval",
     body: approvalGateText({
       rootCause: diagnosis.rootCause,
+      evidence: diagnosis.evidence,
+      confidence: diagnosis.confidence,
+      reasonForConfidence: diagnosis.reasoning,
       proposedAction,
       risk: proposal.risk,
       rollback: proposal.rollback,
@@ -152,7 +151,7 @@ const checkoutDiagnosis: Diagnosis = {
     "Logs: PaymentAdapter timeout after 500ms, trace-correlated with 4c21",
   ],
   reasoning:
-    "The error spike begins two minutes after 4c21. No payment-side deploy. The only checkout change in 4c21 that matches the failure mode is the timeout reduction. Sandbox correlation of timeout errors vs payment latency distribution confirms ~8% of calls cannot complete in 500ms.",
+    "The error spike begins two minutes after 4c21. The deploy diff shows the timeout reduction, and payment latency remains above the new threshold. That combination supports the timeout regression hypothesis. The stable baseline before 4c21 is correlation, not proof of zero errors.",
 };
 
 const checkoutProposal: Proposal = {
@@ -164,7 +163,8 @@ const checkoutProposal: Proposal = {
   impact:
     "Brief blip on in-flight checkout requests during the rollback (~30s). Timeout returns to 5s, which matches current payment latency.",
   risk: "Low",
-  rollback: "Re-apply deploy 4c21 if rollback itself misbehaves; feature flag PAYMENT_TIMEOUT_MS can pin 5000 without a full rollback.",
+  rollback:
+    "Re-apply deploy 4c21 if rollback itself misbehaves; feature flag PAYMENT_TIMEOUT_MS can pin 5000 without a full rollback.",
   recoverEta: "3–6 minutes after approval",
 };
 
@@ -192,7 +192,8 @@ const paymentProposal: Proposal = {
   impact:
     "In-flight sessions on cluster-2 will re-auth (~2 minutes of extra logins). No schema change.",
   risk: "Medium",
-  rollback: "Fail back to redis-cluster-2 if cluster-1 saturates; keep cluster-2 in standby until memory is confirmed.",
+  rollback:
+    "Fail back to redis-cluster-2 if cluster-1 saturates; keep cluster-2 in standby until memory is confirmed.",
   recoverEta: "8–12 minutes after approval",
 };
 
@@ -220,7 +221,8 @@ const recsProposal: Proposal = {
   impact:
     "Cache will refill over a few minutes. Extra replicas add cost until scale-in. No user-facing downtime expected.",
   risk: "Low",
-  rollback: "Re-apply CACHE_TTL=30 and scale-in immediately if the revert causes stale-recommendation incidents.",
+  rollback:
+    "Re-apply CACHE_TTL=30 and scale-in immediately if the revert causes stale-recommendation incidents.",
   recoverEta: "5–10 minutes after approval",
 };
 
@@ -268,8 +270,7 @@ function checkoutPlaybook(): Playbook {
     id: "checkout",
     title: "Checkout error-rate spike",
     extracted,
-    confirm:
-      "Checkout in us-east-1 is failing ~8.7% of requests after deploy 4c21.",
+    confirm: "Checkout in us-east-1 is failing ~8.7% of requests after deploy 4c21.",
     diagnosis: checkoutDiagnosis,
     proposal: checkoutProposal,
     investigate: [
@@ -346,7 +347,8 @@ function checkoutPlaybook(): Playbook {
       },
       {
         ...stage(4),
-        body: checkoutProposal.steps.join("\n") +
+        body:
+          checkoutProposal.steps.join("\n") +
           `\n\nImpact: ${checkoutProposal.impact}\nRisk: ${checkoutProposal.risk}\nTime to recover: ${checkoutProposal.recoverEta}\nRollback: ${checkoutProposal.rollback}`,
         patch: { stage: 4, proposal: checkoutProposal },
       },
@@ -381,15 +383,35 @@ function checkoutPlaybook(): Playbook {
         body: "checkout-service rolled back 4c21 → 9e10.\ntimeoutMs is 5000.\nrollout healthy 12/12 pods.",
         status: "ok",
       },
-      ...sandbox(
-        "python verify.py --service checkout --region us-east-1 --slo error_rate<0.005",
-        "error_rate  0.087 → 0.004  (4m)\np99_ms      2100 → 340\nSLO hold: pass",
-        5,
+      stage(
+        6,
+        "Post-rollback verification is running. Re-checking production with read-only tools and comparing the before/after state.",
       ),
+      ...tool(
+        "metrics.query",
+        "checkout.error_rate, p95 latency after rollback",
+        "checkout.error_rate  0.087 → 0.004\np95_ms               1800 → 340\npayment.latency_p99  812ms → 340ms\nSLO hold: pass",
+        "metrics",
+        6,
+      ),
+      ...tool(
+        "logs.query",
+        "checkout PaymentAdapter timeout after rollback",
+        "No new PaymentAdapter timeout errors in the last 5 minutes.\nNo trace-correlated 500ms aborts after deploy 4c21 was removed.",
+        "logs",
+        6,
+      ),
+      agent(
+        "Recovery verified",
+        "Rollback 4c21 → 9e10 completed successfully.\nError rate: 8.7% → 0.4%\np95 latency: 1.8s → 340ms\nLogs: timeout errors stopped\nRecovery status: RECOVERED\nConfidence: High",
+        6,
+        500,
+      ),
+      stage(7, "Recovery confirmed. Resolving the incident after post-rollback verification."),
       {
         delayMs: 500,
         kind: "close",
-        stage: 5,
+        stage: 7,
         title: "Incident closed",
         body: "Checkout error rate is back under 0.5% in us-east-1. 4c21 remains blocked pending timeout review.",
         patch: { status: "closed" },
@@ -515,15 +537,31 @@ function paymentPlaybook(): Playbook {
         body: "DNS cutover complete. 502 rate 0.40 → 0.06 and falling.",
         status: "ok",
       },
-      ...sandbox(
-        "python verify.py --service payment --slo success>0.995",
-        "success_rate  0.60 → 0.997\nredis-cluster-1.mem  0.62\nSLO hold: pass",
-        5,
+      stage(6, "Verifying recovery after failover with read-only metrics and logs."),
+      ...tool(
+        "metrics.query",
+        "payment.http_5xx, redis-cluster-1 health after failover",
+        "payment.http_5xx      0.40 → 0.06\nredis-cluster-1.mem   0.62\nredis-cluster-2.mem   0.97 (quarantined)\nSLO hold: pass",
+        "metrics",
+        6,
       ),
+      ...tool(
+        "logs.query",
+        "payment 502 and redis-cluster-2 resets after failover",
+        "No new connection reset errors on redis-cluster-2 in the last 5 minutes.\n502 retries continue to decline.",
+        "logs",
+        6,
+      ),
+      agent(
+        "Recovery verified",
+        "Failover completed successfully.\nError rate: 40% → 6% and falling\nLogs: connection reset errors stopped\nRecovery status: RECOVERED\nConfidence: High",
+        6,
+      ),
+      stage(7, "Recovery confirmed. Resolving the incident after post-failover verification."),
       {
         delayMs: 500,
         kind: "close",
-        stage: 5,
+        stage: 7,
         title: "Incident closed",
         body: "Payment 502s recovered after session-store failover. cluster-2 remains isolated pending memory upgrade.",
         patch: { status: "closed" },
@@ -544,8 +582,7 @@ function recsPlaybook(): Playbook {
     id: "recs",
     title: "Recommendation CPU / latency",
     extracted,
-    confirm:
-      "Recommendation service is CPU-bound at 97% with p99 latency of 4.2s.",
+    confirm: "Recommendation service is CPU-bound at 97% with p99 latency of 4.2s.",
     diagnosis: recsDiagnosis,
     proposal: recsProposal,
     investigate: [
@@ -636,10 +673,31 @@ function recsPlaybook(): Playbook {
         body: "TTL restored. Two replicas warming. miss_rate 0.78 → 0.21.",
         status: "ok",
       },
+      stage(6, "Verifying recovery with read-only metrics and logs after the TTL revert."),
+      ...tool(
+        "metrics.query",
+        "recommendation.cpu, p99, cache_miss after revert",
+        "cpu             0.97 → 0.48\np99_s           4.2 → 0.36\ncache_miss      0.78 → 0.21\norigin_rps      ×6 → ×1.1",
+        "metrics",
+        6,
+      ),
+      ...tool(
+        "logs.query",
+        "recommendation cache miss after revert",
+        "Cache miss volume falling.\nOrigin worker saturation cleared.\nNo new overload warnings in the last 5 minutes.",
+        "logs",
+        6,
+      ),
+      agent(
+        "Recovery verified",
+        "Config revert completed successfully.\nCPU: 97% → 48%\np99: 4.2s → 360ms\nLogs: cache stampede symptoms cleared\nRecovery status: RECOVERED\nConfidence: High",
+        6,
+      ),
+      stage(7, "Recovery confirmed. Resolving the incident after post-revert verification."),
       {
         delayMs: 500,
         kind: "close",
-        stage: 5,
+        stage: 7,
         title: "Incident closed",
         body: "p99 4.2s → 360ms. CPU 97% → 48%. Extra replicas will scale in after 15 minutes of SLO hold.",
         patch: { status: "closed" },
@@ -752,10 +810,38 @@ function authPlaybook(): Playbook {
         body: "auth-lib 2.3.9 live. keys rotated. sessions issued after 2.4.1 deploy have been expired.",
         status: "ok",
       },
+      stage(6, "Verifying recovery with read-only logs, traces, and metrics after the downgrade."),
+      ...tool(
+        "metrics.query",
+        "auth latency and error rate after rollback",
+        "auth.error_rate  0.12% → 0.11%\nlatency p99      41ms → 38ms\nno exploitation signal",
+        "metrics",
+        6,
+      ),
+      ...tool(
+        "logs.query",
+        "auth malformed tokens after rollback",
+        "No malformed-token spikes.\nNo RCE-like payloads.\nError rate unchanged and stable.",
+        "logs",
+        6,
+      ),
+      ...tool(
+        "traces.get",
+        "auth latency / error after rollback",
+        "p99 38ms (baseline 38ms). error_rate 0.11% (baseline 0.11%). Traffic normal.",
+        "traces",
+        6,
+      ),
+      agent(
+        "Recovery verified",
+        "Rollback to auth-lib 2.3.9 completed successfully.\nError rate: baseline stable\nLogs: no anomalous token activity\nRecovery status: RECOVERED\nConfidence: High",
+        6,
+      ),
+      stage(7, "Recovery confirmed. Resolving the incident after post-rollback verification."),
       {
         delayMs: 500,
         kind: "close",
-        stage: 5,
+        stage: 7,
         title: "Incident closed",
         body: "Vulnerable build is out of production. 2.4.1 is blocked in the registry. No exploitation found in the 45-minute window.",
         patch: { status: "closed" },
@@ -765,12 +851,8 @@ function authPlaybook(): Playbook {
 }
 
 function genericPlaybook(alert: string): Playbook {
-  const service =
-    alert.match(/\b([a-z][a-z0-9_-]*(?:service|svc|api)?)\b/i)?.[1] ??
-    "production";
-  const region =
-    alert.match(/\b(us-east-1|us-west-2|eu-west-1|ap-south-1)\b/i)?.[1] ??
-    "unknown";
+  const service = alert.match(/\b([a-z][a-z0-9_-]*(?:service|svc|api)?)\b/i)?.[1] ?? "production";
+  const region = alert.match(/\b(us-east-1|us-west-2|eu-west-1|ap-south-1)\b/i)?.[1] ?? "unknown";
   const extracted: ExtractedFields = {
     service,
     severity: /crit|sev-?1|p0/i.test(alert) ? "SEV-1" : "SEV-2",
@@ -881,13 +963,37 @@ function genericPlaybook(alert: string): Playbook {
         body: "Investigation session attached to on-call. No production mutation performed.",
         status: "ok",
       },
+      stage(
+        6,
+        "Verification is skipped because no mutation ran; the incident remains parked for more telemetry.",
+      ),
+      ...tool(
+        "metrics.query",
+        "generic service follow-up",
+        "No new metrics were produced because the incident was parked rather than remediated.",
+        "metrics",
+        6,
+      ),
+      ...tool(
+        "logs.query",
+        "generic service follow-up",
+        "No post-action logs to verify. Awaiting additional evidence before mutation is justified.",
+        "logs",
+        6,
+      ),
+      agent(
+        "Verification deferred",
+        "No remediation ran, so there is nothing to recover yet.\nRecovery status: NOT RECOVERED\nNext step: continue investigation rather than auto-mutating production.",
+        6,
+      ),
       {
         delayMs: 400,
-        kind: "close",
-        stage: 5,
+        kind: "system",
+        stage: 6,
         title: "Incident parked",
-        body: "Closed as 'needs more telemetry'. Session remains available to resume if new evidence arrives.",
-        patch: { status: "closed" },
+        body: "Resolution is deferred until more telemetry arrives. The session remains open and no production mutation is authorized.",
+        status: "blocked",
+        patch: { status: "parked", writeLock: "engaged" },
       },
     ],
   };

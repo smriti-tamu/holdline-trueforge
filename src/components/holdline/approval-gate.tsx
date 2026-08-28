@@ -31,6 +31,9 @@ export function ApprovalGate({
 
   const body = approvalGateText({
     rootCause: session.diagnosis.rootCause,
+    evidence: session.diagnosis.evidence,
+    confidence: session.diagnosis.confidence,
+    reasonForConfidence: session.diagnosis.reasoning,
     proposedAction: session.proposal.steps.join(" "),
     risk: session.proposal.risk,
     rollback: session.proposal.rollback,
