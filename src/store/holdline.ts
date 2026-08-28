@@ -1,27 +1,13 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import {
-  appendHuman,
-  approveSession,
-  beginInvestigation,
-  createSession,
-  failInvestigation,
-  finishInvestigation,
-  recordToolResult,
-  rejectSession,
-  replyToHuman,
-} from "@/lib/incident/engine";
-import {
-  runLiveIncidentInvestigation,
-} from "@/lib/mcp-connection";
-import {
-  DEFAULT_HOLDLINE_CONNECTION,
-  type HoldlineConnectionConfig,
-} from "@/lib/holdline-connection";
+import { appendHuman, approveSession, beginInvestigation, createSession, failInvestigation, finishInvestigation, recordToolResult, rejectSession, replyToHuman } from "@/lib/incident/engine";
+import { runLiveIncidentInvestigation } from "@/lib/mcp-connection";
+import { DEFAULT_HOLDLINE_CONNECTION, type HoldlineConnectionConfig } from "@/lib/holdline-connection";
 import { isApprovePhrase, isRejectPhrase } from "@/lib/utils";
-import type { IncidentSession } from "@/lib/incident/types";
+import type { IncidentSession, TimelineEvent } from "@/lib/incident/types";
 
 const MAX_SESSIONS = 16;
+const HOLDLINE_PERSIST_VERSION = 2;
 
 type HoldlineStore = {
   sessions: IncidentSession[];
@@ -41,6 +27,26 @@ type HoldlineStore = {
   resetConnection: () => void;
 };
 
+export function statusTone(status: IncidentSession["status"]) {
+  if (status === "waiting") return "warn" as const;
+  if (status === "parked") return "warn" as const;
+  if (status === "closed") return "ok" as const;
+  if (status === "rejected") return "danger" as const;
+  if (status === "failed") return "danger" as const;
+  return "fg" as const;
+}
+
+export function statusLabel(status: IncidentSession["status"]) {
+  if (status === "running") return "Investigating";
+  if (status === "waiting") return "Awaiting approval";
+  if (status === "executing") return "Acting";
+  if (status === "parked") return "Parked for evidence";
+  if (status === "closed") return "Closed";
+  if (status === "failed") return "Investigation failed";
+  if (status === "rejected") return "Held";
+  return "Held";
+}
+
 function swap(sessions: IncidentSession[], next: IncidentSession) {
   return [next, ...sessions.filter((session) => session.id !== next.id)].slice(0, MAX_SESSIONS);
 }
@@ -51,6 +57,72 @@ function findSession(state: HoldlineStore, id: string) {
 
 function activeOf(state: Pick<HoldlineStore, "sessions" | "activeId">) {
   return state.sessions.find((session) => session.id === state.activeId) ?? null;
+}
+
+function migrateSession(session: Partial<IncidentSession> & { status?: string }): IncidentSession {
+  const initialStatus = session.status ?? "waiting";
+  const status = initialStatus === "running" || initialStatus === "executing" ? "parked" : (initialStatus as IncidentSession["status"]);
+  const legacy = initialStatus === "running" || initialStatus === "executing";
+  const events = Array.isArray(session.events) ? [...session.events] : [];
+
+  const migrated: IncidentSession = {
+    id: typeof session.id === "string" ? session.id : crypto.randomUUID(),
+    createdAt: typeof session.createdAt === "number" ? session.createdAt : Date.now(),
+    updatedAt: typeof session.updatedAt === "number" ? session.updatedAt : Date.now(),
+    alert: typeof session.alert === "string" ? session.alert : "",
+    title: typeof session.title === "string" ? session.title : "Holdline incident",
+    stage: typeof session.stage === "number" ? (session.stage as IncidentSession["stage"]) : 1,
+    status,
+    writeLock: session.writeLock === "released" ? "released" : "engaged",
+    extracted:
+      session.extracted && typeof session.extracted === "object"
+        ? (session.extracted as IncidentSession["extracted"])
+        : { service: "production", severity: "SEV-2", region: "unknown", timestamp: "unspecified", extra: {} },
+    investigation: session.investigation,
+    diagnosis: session.diagnosis,
+    proposal: session.proposal,
+    events,
+    approvedAt: session.approvedAt,
+    approvedVia: session.approvedVia,
+    errorMessage: session.errorMessage,
+  };
+
+  if (legacy) {
+    migrated.status = "parked";
+    migrated.writeLock = "engaged";
+    migrated.events.push({
+      id: crypto.randomUUID(),
+      ts: Date.now(),
+      kind: "system",
+      stage: migrated.stage,
+      title: "Legacy scripted session reset",
+      body: "This older scripted session was paused and must be restarted as a live investigation. The write lock remains engaged until the live investigation is rerun.",
+      status: "blocked",
+    } satisfies TimelineEvent);
+  }
+
+  return migrated;
+}
+
+export function migrateHoldlinePersisted(state: unknown) {
+  const source = (state && typeof state === "object" ? state : {}) as Record<string, unknown>;
+  const persistedConnection =
+    source.connection && typeof source.connection === "object" ? (source.connection as Partial<HoldlineConnectionConfig>) : {};
+  const sessions = Array.isArray(source.sessions)
+    ? source.sessions.map((item) => migrateSession(item as Partial<IncidentSession>))
+    : [];
+  const activeId = typeof source.activeId === "string" && sessions.some((session) => session.id === source.activeId)
+    ? source.activeId
+    : null;
+
+  return {
+    sessions,
+    activeId,
+    connection: {
+      ...DEFAULT_HOLDLINE_CONNECTION,
+      ...persistedConnection,
+    },
+  };
 }
 
 export const useHoldline = create<HoldlineStore>()(
@@ -81,12 +153,8 @@ export const useHoldline = create<HoldlineStore>()(
         }));
 
         try {
-          const connection = get().connection;
           const result = await runLiveIncidentInvestigation({
-            data: {
-              url: connection.mcpUrl,
-              alertId: trimmed,
-            },
+            data: { alertId: trimmed },
           });
 
           const current = findSession(get(), session.id);
@@ -193,6 +261,7 @@ export const useHoldline = create<HoldlineStore>()(
     }),
     {
       name: "holdline-sessions-v1",
+      version: HOLDLINE_PERSIST_VERSION,
       storage: createJSONStorage(() => {
         if (typeof window === "undefined") {
           return {
@@ -208,6 +277,26 @@ export const useHoldline = create<HoldlineStore>()(
         activeId: state.activeId,
         connection: state.connection,
       }),
+      migrate: (persisted, version) => {
+        const base = (persisted && typeof persisted === "object" ? persisted : {}) as Record<string, unknown>;
+        if (version === 0) {
+          const migrated = migrateHoldlinePersisted(persisted);
+          return {
+            ...base,
+            sessions: migrated.sessions,
+            activeId: migrated.activeId,
+            connection: migrated.connection,
+          };
+        }
+
+        const migrated = migrateHoldlinePersisted(persisted);
+        return {
+          ...base,
+          sessions: migrated.sessions,
+          activeId: migrated.activeId,
+          connection: migrated.connection,
+        };
+      },
       skipHydration: true,
     },
   ),

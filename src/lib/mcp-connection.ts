@@ -8,6 +8,9 @@ import {
 } from "@/lib/incident/playbooks";
 import type { LiveToolResult } from "@/lib/incident/types";
 
+const ALLOWED_LOCAL_MCP_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+const ALLOWED_MCP_PATH = "/mcp";
+
 export type McpConnectionTestInput = {
   transport: "stdio" | "http";
   command: string;
@@ -38,7 +41,6 @@ export type TrueForgeSyncResult = {
 };
 
 export type LiveIncidentInvestigationInput = {
-  url: string;
   alertId: string;
 };
 
@@ -200,15 +202,73 @@ type JsonRpcResponse = {
   error?: { message?: string };
 };
 
-function parseJsonRpcResponse(text: string): JsonRpcResponse | null {
-  if (!text.trim()) return null;
+export function resolveIncidentMonitoringEndpoint(raw: string): string {
+  const value = raw.trim();
+  if (!value) throw new Error("Incident-monitoring endpoint is required.");
+
+  let url: URL;
   try {
-    const parsed = JSON.parse(text) as unknown;
+    url = new URL(value);
+  } catch {
+    throw new Error("Incident-monitoring endpoint must be a valid HTTP(S) URL.");
+  }
+
+  if (!/^https?:$/.test(url.protocol)) {
+    throw new Error("Incident-monitoring endpoint must use HTTP or HTTPS only.");
+  }
+
+  const pathname = url.pathname.replace(/\/+$/, "") || "/";
+  if (pathname !== ALLOWED_MCP_PATH) {
+    throw new Error("Incident-monitoring endpoint must target the /mcp path.");
+  }
+
+  const hostname = url.hostname.toLowerCase();
+  const isLocalFallback = hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1";
+  if (!isLocalFallback) {
+    throw new Error("Incident-monitoring endpoint must be a local allow-listed loopback URL.");
+  }
+
+  if (hostname === "0.0.0.0" || hostname === "::" || hostname === "[::]" || hostname.includes(".")) {
+    if (!ALLOWED_LOCAL_MCP_HOSTS.has(hostname)) {
+      throw new Error("Incident-monitoring endpoint must use loopback/localhost only.");
+    }
+  }
+
+
+  return url.toString();
+}
+
+export function parseJsonRpcPayload(text: string): JsonRpcResponse | null {
+  if (!text.trim()) return null;
+
+  const trimmed = text.trim();
+  const lines = trimmed.split(/\r?\n/);
+  const dataLines: string[] = [];
+  for (const line of lines) {
+    if (line.startsWith("data: ")) {
+      dataLines.push(line.slice("data: ".length));
+    } else if (line.startsWith("data:")) {
+      dataLines.push(line.slice("data:".length));
+    }
+  }
+
+  const payloadText = dataLines.length > 0 ? dataLines.join("\n") : trimmed;
+  try {
+    const parsed = JSON.parse(payloadText) as unknown;
     if (!parsed || typeof parsed !== "object") return null;
     return parsed as JsonRpcResponse;
   } catch {
     return null;
   }
+}
+
+function parseJsonRpcResponse(text: string): JsonRpcResponse | null {
+  return parseJsonRpcPayload(text);
+}
+
+export function toolResultStatus(result: { isError?: boolean } | null | undefined): "ok" | "failed" | "skipped" {
+  if (!result || typeof result !== "object") return "skipped";
+  return result.isError === true ? "failed" : "ok";
 }
 
 function textFromToolResult(result: unknown): string {
@@ -240,16 +300,8 @@ function titleForLiveTool(tool: InvestigationToolName): string {
 async function runLiveMcpInvestigation(
   input: LiveIncidentInvestigationInput,
 ): Promise<LiveIncidentInvestigationResult> {
-  const endpoint = input.url.trim();
+  const endpoint = resolveIncidentMonitoringEndpoint(process.env.HOLDLINE_INCIDENT_MCP_URL ?? "http://127.0.0.1:8000/mcp");
   const alertId = input.alertId.trim();
-
-  if (!endpoint) {
-    return {
-      ok: false,
-      tools: [],
-      errorMessage: "MCP URL is required. Use http://127.0.0.1:8000/mcp for the local demo.",
-    };
-  }
 
   if (!alertId) {
     return {
@@ -299,6 +351,15 @@ async function runLiveMcpInvestigation(
     }
   }
 
+  async function cleanupSession() {
+    if (!sessionId) return;
+    try {
+      await cleanupMcpSession(endpoint, sessionId);
+    } finally {
+      sessionId = null;
+    }
+  }
+
   async function callTool(
     tool: InvestigationToolName,
     traceId?: string,
@@ -314,12 +375,13 @@ async function runLiveMcpInvestigation(
         },
       });
 
+      const result = (response as { result?: { isError?: boolean; content?: Array<{ type?: string; text?: string }> } } | null)?.result;
       return {
         tool,
         title: titleForLiveTool(tool),
         bucket: bucketForTool(tool),
-        response: textFromToolResult(response?.result),
-        status: "ok",
+        response: textFromToolResult(result),
+        status: toolResultStatus(result),
       };
     } catch (error) {
       return {
@@ -357,33 +419,38 @@ async function runLiveMcpInvestigation(
       false,
     );
 
-    const alert = await callTool("get_alert");
+    try {
+      const alert = await callTool("get_alert");
 
-    const [metrics, logs, deploys] = await Promise.all([
-      callTool("query_metrics"),
-      callTool("query_logs"),
-      callTool("list_deploys"),
-    ]);
+      const [metrics, logs, deploys] = await Promise.all([
+        callTool("query_metrics"),
+        callTool("query_logs"),
+        callTool("list_deploys"),
+      ]);
 
-    const traceId = extractTraceId(logs.response);
+      const traceId = extractTraceId(logs.response);
 
-    const trace: LiveToolResult = traceId
-      ? await callTool("get_trace", traceId)
-      : {
-          tool: "get_trace",
-          title: titleForLiveTool("get_trace"),
-          bucket: bucketForTool("get_trace"),
-          response: "No trace ID was found in the returned logs, so trace lookup was skipped.",
-          status: "skipped",
-        };
+      const trace: LiveToolResult = traceId
+        ? await callTool("get_trace", traceId)
+        : {
+            tool: "get_trace",
+            title: titleForLiveTool("get_trace"),
+            bucket: bucketForTool("get_trace"),
+            response: "No trace ID was found in the returned logs, so trace lookup was skipped.",
+            status: "skipped",
+          };
 
-    const tickets = await callTool("search_tickets");
+      const tickets = await callTool("search_tickets");
 
-    return {
-      ok: true,
-      tools: [alert, metrics, logs, deploys, trace, tickets],
-    };
+      return {
+        ok: true,
+        tools: [alert, metrics, logs, deploys, trace, tickets],
+      };
+    } finally {
+      await cleanupSession();
+    }
   } catch (error) {
+    await cleanupSession();
     return {
       ok: false,
       tools: [],
@@ -597,6 +664,22 @@ async function runTrueForgeSync(input: TrueForgeSyncInput): Promise<TrueForgeSyn
       ok: false,
       errorMessage: error instanceof Error ? error.message : String(error),
     };
+  }
+}
+
+export async function cleanupMcpSession(endpoint: string, sessionId: string) {
+  const target = endpoint.trim();
+  if (!target || !sessionId) return;
+
+  try {
+    await fetch(target, {
+      method: "DELETE",
+      headers: {
+        "mcp-session-id": sessionId,
+      },
+    });
+  } catch {
+    // Session cleanup is best-effort and must not hide original investigation errors.
   }
 }
 

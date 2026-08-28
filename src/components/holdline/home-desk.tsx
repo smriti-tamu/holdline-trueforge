@@ -6,25 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { TEST_ALERTS, type IncidentSession } from "@/lib/incident/types";
-import { useHoldline } from "@/store/holdline";
+import { statusLabel, statusTone, useHoldline } from "@/store/holdline";
 import { cn } from "@/lib/utils";
-
-function statusTone(status: IncidentSession["status"]) {
-  if (status === "waiting") return "warn" as const;
-  if (status === "parked") return "warn" as const;
-  if (status === "closed") return "ok" as const;
-  if (status === "rejected") return "danger" as const;
-  return "fg" as const;
-}
-
-function statusLabel(status: IncidentSession["status"]) {
-  if (status === "running") return "Investigating";
-  if (status === "waiting") return "Awaiting approval";
-  if (status === "executing") return "Acting";
-  if (status === "parked") return "Parked for evidence";
-  if (status === "closed") return "Closed";
-  return "Held";
-}
 
 export function HomeDesk({
   sessions,

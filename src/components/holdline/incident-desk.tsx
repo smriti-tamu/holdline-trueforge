@@ -81,7 +81,7 @@ export function IncidentDesk({
               </Button>
             </div>
           ) : null}
-          <ApprovalGate session={session} onApprove={onApprove} onReject={onReject} />
+          <ApprovalGate session={session} />
           <Composer session={session} onSend={onSend} />
         </section>
         <aside className="flex min-h-[16rem] flex-col border-t border-border p-4 lg:min-h-0 lg:border-t-0 lg:border-l">
