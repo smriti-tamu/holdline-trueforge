@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { randomUUID } from "node:crypto";
 import http from "node:http";
 import process from "node:process";
 
@@ -15,7 +16,10 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        alertId: { type: "string", description: "Exact alert ID or alert text supplied by the user." },
+        alertId: {
+          type: "string",
+          description: "Exact alert ID or alert text supplied by the user.",
+        },
       },
       required: ["alertId"],
       additionalProperties: false,
@@ -86,7 +90,7 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
-    {
+  {
     name: "rollback_deployment",
     description:
       "Simulate rolling back a deployment. This is a destructive demo action and requires explicit human approval before execution.",
@@ -121,10 +125,8 @@ const TEST_ALERTS = [
     alert:
       "Checkout error rate jumped from 0.3% to 8.7% in the last 12 minutes in us-east-1 after deploy 4c21.",
     summary: "Checkout error rate spike after deploy 4c21.",
-    metrics:
-      "checkout.error_rate{region=us-east-1}\n  0.3% -> 8.7%\npayment.latency_p99\n  812ms",
-    logs:
-      "ERROR PaymentAdapter timeout after 500ms trace=8af2c1 deploy=4c21\nERROR PaymentAdapter timeout after 500ms trace=91bb04 deploy=4c21",
+    metrics: "checkout.error_rate{region=us-east-1}\n  0.3% -> 8.7%\npayment.latency_p99\n  812ms",
+    logs: "ERROR PaymentAdapter timeout after 500ms trace=8af2c1 deploy=4c21\nERROR PaymentAdapter timeout after 500ms trace=91bb04 deploy=4c21",
     deploys:
       "4c21  12:01 UTC  checkout-service  tighten PaymentAdapter timeout\n9e10  stable baseline",
     tickets: "No matching open tickets in the mock catalog.",
@@ -140,11 +142,11 @@ const TEST_ALERTS = [
     summary: "Payment 502s caused by session-store pressure on redis-cluster-2.",
     metrics:
       "payment.http_5xx 0.40\nredis-cluster-2.mem 0.97\nredis-cluster-2.evict 12400/min\nredis-cluster-2.cpu 0.91",
-    logs:
-      "ERROR session store: connection reset host=redis-cluster-2:6379\nWARN retry exhausted, returning 502",
+    logs: "ERROR session store: connection reset host=redis-cluster-2:6379\nWARN retry exhausted, returning 502",
     deploys: "No payment-service deploys in the last 6 hours.",
     tickets: "INC-4412 14:18 UTC infra redis-cluster-2 memory pressure",
-    traces: "payment /charge -> redis-cluster-2 connection reset\nupstream returns 502 after retry exhaustion",
+    traces:
+      "payment /charge -> redis-cluster-2 connection reset\nupstream returns 502 after retry exhaustion",
   },
   {
     id: "recs",
@@ -153,10 +155,8 @@ const TEST_ALERTS = [
     region: "global",
     alert: "CPU on the recommendation service is at 97% and p99 latency is 4.2s.",
     summary: "Recommendation service cache stampede after TTL dropped to 30s.",
-    metrics:
-      "cpu 0.97\np99 4.2s\ncache_miss 0.12 -> 0.78\norigin_rps x6",
-    logs:
-      "cache miss on popular:home, popular:foryou, similar:*\norigin handler occupying 20+ worker threads",
+    metrics: "cpu 0.97\np99 4.2s\ncache_miss 0.12 -> 0.78\norigin_rps x6",
+    logs: "cache miss on popular:home, popular:foryou, similar:*\norigin handler occupying 20+ worker threads",
     deploys: "30m ago recs-cache config CACHE_TTL=30 (was 3600).",
     tickets: "No matching open tickets in the mock catalog.",
     traces: "edge RPS flat\norigin RPS spikes in lockstep with cache misses",
@@ -168,10 +168,8 @@ const TEST_ALERTS = [
     region: "global",
     alert: "New critical vulnerability flagged in the auth library we deployed 45 minutes ago.",
     summary: "Critical auth-library vulnerability with no exploitation observed yet.",
-    metrics:
-      "auth.error_rate baseline\nlatency baseline\nno exploitation signal",
-    logs:
-      "No malformed-token spikes.\nNo RCE-like payloads.\nError rate unchanged.",
+    metrics: "auth.error_rate baseline\nlatency baseline\nno exploitation signal",
+    logs: "No malformed-token spikes.\nNo RCE-like payloads.\nError rate unchanged.",
     deploys: "45m ago auth-service auth-lib 2.4.1 (was 2.3.9).",
     tickets: "CVE-2026-8841 CVSS 9.8 RCE in token parser",
     traces: "p99 41ms (baseline 38ms). error_rate 0.12% (baseline 0.11%).",
@@ -235,13 +233,11 @@ function toolText(title, body) {
   return `${title}\n\n${body}`;
 }
 
-let checkoutRecoveryActive = false;
-
-function callTool(name, args) {
+function callTool(name, args, sessionState) {
   const { scenario, alertId } = resolveAlert(args);
 
   if (name === "get_alert") {
-    if (alertId === TEST_ALERTS[0].alert) checkoutRecoveryActive = false;
+    if (alertId === TEST_ALERTS[0].alert) sessionState.checkoutRecoveryActive = false;
     return toolText(
       "Stage 1 - Alert Reception",
       jsonText({
@@ -256,7 +252,7 @@ function callTool(name, args) {
   }
 
   if (name === "query_metrics") {
-    if (checkoutRecoveryActive && alertId === TEST_ALERTS[0].alert) {
+    if (sessionState.checkoutRecoveryActive && alertId === TEST_ALERTS[0].alert) {
       return toolText(
         "Post-rollback metrics",
         jsonText({
@@ -270,13 +266,12 @@ function callTool(name, args) {
   }
 
   if (name === "query_logs") {
-    if (checkoutRecoveryActive && alertId === TEST_ALERTS[0].alert) {
+    if (sessionState.checkoutRecoveryActive && alertId === TEST_ALERTS[0].alert) {
       return toolText(
         "Post-rollback logs",
         jsonText({
           alert_id: alertId,
-          logs:
-            "INFO checkout serving deploy=9e10\nNo new PaymentAdapter timeout errors in the last 5 minutes.",
+          logs: "INFO checkout serving deploy=9e10\nNo new PaymentAdapter timeout errors in the last 5 minutes.",
         }),
       );
     }
@@ -294,49 +289,48 @@ function callTool(name, args) {
   if (name === "get_trace") {
     return toolText("Trace", jsonText({ alert_id: alertId, traces: scenario.traces }));
   }
-  
+
   if (name === "rollback_deployment") {
-  const supportedAlertId = TEST_ALERTS[0].alert;
+    const supportedAlertId = TEST_ALERTS[0].alert;
 
-  const requestedAlertId =
-    typeof args?.alertId === "string" ? args.alertId.trim() : "";
+    const requestedAlertId = typeof args?.alertId === "string" ? args.alertId.trim() : "";
 
-  const targetDeploy =
-    typeof args?.targetDeploy === "string" && args.targetDeploy.trim()
-      ? args.targetDeploy.trim()
-      : "";
+    const targetDeploy =
+      typeof args?.targetDeploy === "string" && args.targetDeploy.trim()
+        ? args.targetDeploy.trim()
+        : "";
 
-  if (requestedAlertId !== supportedAlertId) {
-    throw new Error(
-      "Unsupported remediation: this mock rollback only supports the checkout alert for deploy 4c21.",
+    if (requestedAlertId !== supportedAlertId) {
+      throw new Error(
+        "Unsupported remediation: this mock rollback only supports the checkout alert for deploy 4c21.",
+      );
+    }
+
+    if (targetDeploy !== "9e10") {
+      throw new Error(
+        "Unsupported rollback target: this mock incident can only restore stable baseline 9e10.",
+      );
+    }
+
+    sessionState.checkoutRecoveryActive = true;
+
+    return toolText(
+      "Simulated remediation result",
+      jsonText({
+        status: "simulated_success",
+        simulated: true,
+        action: "Rollback checkout deployment 4c21 to 9e10",
+        alert_id: requestedAlertId,
+        message:
+          "Mock rollback completed for demo purposes. No real production system was changed.",
+      }),
     );
   }
-
-  if (targetDeploy !== "9e10") {
-    throw new Error(
-      "Unsupported rollback target: this mock incident can only restore stable baseline 9e10.",
-    );
-  }
-
-  checkoutRecoveryActive = true;
-
-  return toolText(
-    "Simulated remediation result",
-    jsonText({
-      status: "simulated_success",
-      simulated: true,
-      action: "Rollback checkout deployment 4c21 to 9e10",
-      alert_id: requestedAlertId,
-      message:
-        "Mock rollback completed for demo purposes. No real production system was changed.",
-    }),
-  );
-}
 
   throw new Error(`Unknown tool: ${name}`);
 }
 
-function handleRpc(message) {
+function handleRpc(message, sessionState) {
   if (!message || typeof message !== "object") {
     return { error: { code: -32600, message: "Invalid Request" } };
   }
@@ -365,7 +359,7 @@ function handleRpc(message) {
 
   if (message.method === "tools/call") {
     try {
-      const text = callTool(message.params?.name, message.params?.arguments ?? {});
+      const text = callTool(message.params?.name, message.params?.arguments ?? {}, sessionState);
       return { jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text }] } };
     } catch (error) {
       return {
@@ -412,6 +406,7 @@ function parseJson(text) {
 const host = process.env.HOST || "127.0.0.1";
 const port = Number(process.env.PORT || 8000);
 const path = "/mcp";
+const sessions = new Map();
 
 const server = http.createServer((req, res) => {
   if (req.method === "GET" && req.url === "/health") {
@@ -421,6 +416,17 @@ const server = http.createServer((req, res) => {
 
   if (req.url !== path) {
     sendJson(res, 404, { error: { message: "Not found" } });
+    return;
+  }
+
+  if (req.method === "DELETE") {
+    const sessionId = req.headers["mcp-session-id"];
+    if (typeof sessionId !== "string" || !sessions.delete(sessionId)) {
+      sendJson(res, 404, { error: { message: "Unknown MCP session" } });
+      return;
+    }
+    res.writeHead(204);
+    res.end();
     return;
   }
 
@@ -436,9 +442,26 @@ const server = http.createServer((req, res) => {
   });
   req.on("end", () => {
     const message = parseJson(body);
-    const response = handleRpc(message);
+    const isInitialize = message?.method === "initialize";
+    let sessionId = req.headers["mcp-session-id"];
+
+    if (Array.isArray(sessionId)) sessionId = sessionId[0];
+
+    if (isInitialize) {
+      sessionId = randomUUID();
+      sessions.set(sessionId, { checkoutRecoveryActive: false });
+    } else if (typeof sessionId !== "string" || !sessions.has(sessionId)) {
+      sendJson(res, 400, {
+        jsonrpc: "2.0",
+        id: message?.id ?? null,
+        error: { code: -32000, message: "Missing or invalid MCP session ID" },
+      });
+      return;
+    }
+
+    const response = handleRpc(message, sessions.get(sessionId));
     if (response.notification) {
-      res.writeHead(202);
+      res.writeHead(202, { "mcp-session-id": sessionId });
       res.end();
       return;
     }
@@ -446,7 +469,7 @@ const server = http.createServer((req, res) => {
       sendJson(res, 400, response);
       return;
     }
-    sendJson(res, 200, response);
+    sendJson(res, 200, response, { "mcp-session-id": sessionId });
   });
 });
 

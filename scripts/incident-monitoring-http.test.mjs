@@ -45,12 +45,37 @@ test("checkout rollback exposes tool-supported recovery evidence", async (t) => 
   await waitForHealth(`${base}/health`);
 
   let requestId = 0;
-  async function callTool(name, args) {
+  async function createClient() {
     const response = await fetch(`${base}/mcp`, {
       method: "POST",
       headers: {
         accept: "application/json, text/event-stream",
         "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: (requestId += 1),
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "test", version: "1.0.0" },
+        },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const sessionId = response.headers.get("mcp-session-id");
+    assert.ok(sessionId);
+    return sessionId;
+  }
+
+  async function callTool(sessionId, name, args) {
+    const response = await fetch(`${base}/mcp`, {
+      method: "POST",
+      headers: {
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+        "mcp-session-id": sessionId,
       },
       body: JSON.stringify({
         jsonrpc: "2.0",
@@ -62,25 +87,35 @@ test("checkout rollback exposes tool-supported recovery evidence", async (t) => 
     return response.json();
   }
 
-  await callTool("get_alert", { alertId: checkoutAlert });
-  const before = await callTool("query_metrics", { alertId: checkoutAlert });
+  const firstSession = await createClient();
+  const secondSession = await createClient();
+
+  await callTool(firstSession, "get_alert", { alertId: checkoutAlert });
+  await callTool(secondSession, "get_alert", { alertId: checkoutAlert });
+  const before = await callTool(firstSession, "query_metrics", { alertId: checkoutAlert });
   assert.match(before.result.content[0].text, /0\.3% -> 8\.7%/);
 
-  const invalid = await callTool("rollback_deployment", {
+  const invalid = await callTool(firstSession, "rollback_deployment", {
     alertId: checkoutAlert,
     targetDeploy: "4c21",
   });
   assert.match(invalid.error.message, /only restore stable baseline 9e10/);
 
-  const rollback = await callTool("rollback_deployment", {
+  const rollback = await callTool(firstSession, "rollback_deployment", {
     alertId: checkoutAlert,
     targetDeploy: "9e10",
   });
   assert.match(rollback.result.content[0].text, /simulated_success/);
 
-  const afterMetrics = await callTool("query_metrics", { alertId: checkoutAlert });
-  const afterLogs = await callTool("query_logs", { alertId: checkoutAlert });
+  const afterMetrics = await callTool(firstSession, "query_metrics", { alertId: checkoutAlert });
+  const afterLogs = await callTool(firstSession, "query_logs", { alertId: checkoutAlert });
   assert.match(afterMetrics.result.content[0].text, /8\.7% -> 0\.4%/);
   assert.match(afterMetrics.result.content[0].text, /812ms -> 340ms/);
   assert.match(afterLogs.result.content[0].text, /No new PaymentAdapter timeout errors/);
+
+  const isolatedMetrics = await callTool(secondSession, "query_metrics", {
+    alertId: checkoutAlert,
+  });
+  assert.match(isolatedMetrics.result.content[0].text, /0\.3% -> 8\.7%/);
+  assert.doesNotMatch(isolatedMetrics.result.content[0].text, /8\.7% -> 0\.4%/);
 });

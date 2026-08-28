@@ -143,22 +143,20 @@ The rollback is simulated. No production system is changed.
 Before opening a pull request, run:
 
 ```bash
-node --test scripts/agent-manifest.test.mjs
+node --test scripts/agent-manifest.test.mjs scripts/incident-monitoring-http.test.mjs scripts/incident-playbooks.test.mjs
 npm run typecheck
 npm run build
 ```
 
-The manifest regression test prevents sandbox, subagents, the iteration budget, model selection, or rollback approval from being silently disabled.
+The regression tests protect the TrueForge harness configuration, approval policy, exact rollback contract, post-action recovery evidence, and HTTP MCP session isolation.
 
 ## Qodo Code Review Evidence
 
-This section must be completed after the current branch is reviewed and merged.
-
-- Pull request: pending
-- Initial Qodo findings: pending
-- Fixes made: pending
-- Dismissed findings and rationale: pending
-- Follow-up review: pending
+- Pull request: [#2 Complete TrueForge incident recovery flow](https://github.com/smriti-tamu/holdline-trueforge/pull/2)
+- Initial Qodo findings: three high-priority bugs covering process-global recovery state, `RECOVERING` incidents being closed, and generic `NOT RECOVERED` incidents being closed.
+- Fixes made: recovery state is isolated by MCP session ID and covered by a two-client regression test; catalogued playbooks now report `RECOVERED` only when their fixed verification evidence meets the recovery contract; generic incidents remain open in a resumable `parked` state at Stage 6 with the write lock engaged.
+- Dismissed findings and rationale: none. Qodo's optional transport-neutral MCP core refactor is recorded as future hardening because it was an architectural recommendation rather than one of the three reported bugs.
+- Follow-up review: requested on the corrective commit; this line will be updated with the result before merge.
 
 ## Notes
 

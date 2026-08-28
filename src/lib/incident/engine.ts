@@ -194,7 +194,9 @@ export function replyToHuman(session: IncidentSession, text: string): IncidentSe
         ? `Stage ${session.stage} – ${label}\n\nExecution and verification are in progress. I will confirm when the incident is resolved.`
         : session.status === "closed"
           ? "This incident is closed. Resume it only if you need the record, or open a new alert."
-          : `Stage ${session.stage} – ${label}\n\nWrite lock is still engaged. Reply approve if you want the proposed plan to run.`;
+          : session.status === "parked"
+            ? "Stage 6 – Verify → Recovery\n\nThis incident is parked while we wait for more telemetry. No production change is authorized, and the write lock remains engaged."
+            : `Stage ${session.stage} – ${label}\n\nWrite lock is still engaged. Reply approve if you want the proposed plan to run.`;
 
   const event: TimelineEvent = {
     id: uid(),

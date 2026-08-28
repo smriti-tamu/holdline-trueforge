@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 
 function statusTone(status: IncidentSession["status"]) {
   if (status === "waiting") return "warn" as const;
+  if (status === "parked") return "warn" as const;
   if (status === "closed") return "ok" as const;
   if (status === "rejected") return "danger" as const;
   return "fg" as const;
@@ -20,6 +21,7 @@ function statusLabel(status: IncidentSession["status"]) {
   if (status === "running") return "Investigating";
   if (status === "waiting") return "Awaiting approval";
   if (status === "executing") return "Acting";
+  if (status === "parked") return "Parked for evidence";
   if (status === "closed") return "Closed";
   return "Held";
 }
@@ -32,7 +34,7 @@ export function HomeDesk({
   sessions: IncidentSession[];
   onStart: (alert: string) => void;
   onResume: (id: string) => void;
-  }) {
+}) {
   const [custom, setCustom] = useState("");
   const connection = useHoldline((s) => s.connection);
   const isTrueForgeConnected =
@@ -54,9 +56,8 @@ export function HomeDesk({
           Holdline
         </h1>
         <p className="mt-3 max-w-md text-base text-pretty text-muted">
-          A seven-stage incident responder. It investigates, diagnoses, proposes, acts,
-          verifies recovery, and only then resolves. Nothing irreversible runs until
-          you say so.
+          A seven-stage incident responder. It investigates, diagnoses, proposes, acts, verifies
+          recovery, and only then resolves. Nothing irreversible runs until you say so.
         </p>
       </header>
 
@@ -79,9 +80,7 @@ export function HomeDesk({
               )}
             >
               <div className="flex w-full items-center justify-between gap-2">
-                <Badge tone={item.severity === "SEV-1" ? "danger" : "warn"}>
-                  {item.severity}
-                </Badge>
+                <Badge tone={item.severity === "SEV-1" ? "danger" : "warn"}>{item.severity}</Badge>
                 <ArrowRight className="size-4 text-faint transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-fg" />
               </div>
               <p className="mt-3 font-mono text-xs tracking-wide text-muted uppercase">
@@ -94,7 +93,9 @@ export function HomeDesk({
       </section>
 
       <section>
-        <h2 className="mb-3 text-xs tracking-wide text-muted uppercase">Seven stages. One hard stop.</h2>
+        <h2 className="mb-3 text-xs tracking-wide text-muted uppercase">
+          Seven stages. One hard stop.
+        </h2>
         <ol className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-7 sm:gap-2">
           {[
             { n: "1", t: "Alert", d: "Extract fields. Confirm the problem." },
@@ -105,7 +106,10 @@ export function HomeDesk({
             { n: "6", t: "Verify", d: "Query metrics and logs after the action." },
             { n: "7", t: "Resolve", d: "Close only after recovery is confirmed." },
           ].map((s) => (
-            <li key={s.n} className="rounded-md bg-elevated p-2 shadow-[var(--shadow-border)] sm:p-3">
+            <li
+              key={s.n}
+              className="rounded-md bg-elevated p-2 shadow-[var(--shadow-border)] sm:p-3"
+            >
               <p className="font-mono text-[11px] text-faint">{s.n}</p>
               <p className="mt-1 text-xs font-medium text-fg sm:text-sm">{s.t}</p>
               <p className="mt-1 hidden text-xs text-pretty text-muted sm:block">{s.d}</p>
@@ -117,7 +121,8 @@ export function HomeDesk({
       <section className="rounded-lg bg-elevated p-4 shadow-[var(--shadow-border)] sm:p-5">
         <h2 className="text-xs tracking-wide text-muted uppercase">Custom alert</h2>
         <p className="mt-1 text-sm text-muted">
-          Paste a page. Unfamiliar services stay low-confidence — the harness will not invent telemetry.
+          Paste a page. Unfamiliar services stay low-confidence — the harness will not invent
+          telemetry.
         </p>
         <Textarea
           className="mt-3"
