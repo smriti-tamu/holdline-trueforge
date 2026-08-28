@@ -156,7 +156,7 @@ The regression tests protect the TrueForge harness configuration, approval polic
 - Initial Qodo findings: three high-priority bugs covering process-global recovery state, `RECOVERING` incidents being closed, and generic `NOT RECOVERED` incidents being closed.
 - Fixes made: recovery state is isolated by MCP session ID and covered by a two-client regression test; catalogued playbooks now report `RECOVERED` only when their fixed verification evidence meets the recovery contract; generic incidents remain open in a resumable `parked` state at Stage 6 with the write lock engaged.
 - Dismissed findings and rationale: none. Qodo's optional transport-neutral MCP core refactor is recorded as future hardening because it was an architectural recommendation rather than one of the three reported bugs.
-- Follow-up review: requested on the corrective commit; this line will be updated with the result before merge.
+- Follow-up review: [Qodo confirmed all three tracked issues are addressed](https://github.com/smriti-tamu/holdline-trueforge/pull/2#issuecomment-5446752889) on corrective commit `18919d0`; no new finding was reported.
 
 ## Notes
 
