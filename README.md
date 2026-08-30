@@ -158,6 +158,14 @@ The regression tests protect the TrueForge harness configuration, approval polic
 - Dismissed findings and rationale: none. Qodo's optional transport-neutral MCP core refactor is recorded as future hardening because it was an architectural recommendation rather than one of the three reported bugs.
 - Follow-up review: [Qodo confirmed all three tracked issues are addressed](https://github.com/smriti-tamu/holdline-trueforge/pull/2#issuecomment-5446752889) on corrective commit `18919d0`; no new finding was reported.
 
+---
+
+- Pull request: [#4 Enforce MCP tool schemas, tolerate alertId drift, and stop rollback hallucination](https://github.com/smriti-tamu/holdline-trueforge/pull/4)
+- Initial Qodo findings: two high-priority bugs on the first commit's schema-validation and rollback-matching fix — [(1) type checking was missing](https://github.com/smriti-tamu/holdline-trueforge/pull/4#issuecomment-5466324201), so a present-but-wrong-typed field such as a numeric or `null` `alertId` passed the key-only check and was silently coerced to an empty string by `resolveAlert()`, degrading to the same generic "no matching records" response the fix existed to prevent; (2) the rollback's new tolerant alertId matching (case/whitespace/trailing-punctuation drift) wasn't mirrored in the post-rollback recovery checks, so a rollback accepted with drifted alert text couldn't be verified with that same text — `query_metrics`/`query_logs` would fall through to the stale pre-rollback data instead of showing the recovery actually happened.
+- Fixes made (commit `5a42f78`): `validateArguments()` now checks each provided field's runtime type against its declared schema type and rejects mismatches — including `null`, whose `typeof` is `"object"` and would otherwise slip past a naive check — naming the expected type in the error; the `get_alert`/`query_metrics`/`query_logs` recovery-state checks now use the same normalized comparison as the rollback acceptance check, so all four agree with each other regardless of the exact alertId text a caller used.
+- Dismissed findings and rationale: none — both reported bugs were fixed.
+- Follow-up review: not yet reposted by Qodo as of submission (the fix commit landed shortly before merge). Both findings were instead verified directly: replayed against the running MCP bridge with the exact payloads Qodo's findings described (a numeric `alertId`, and a drifted rollback alertId re-queried for its own recovery state), and covered by new regression tests in `scripts/incident-monitoring-http.test.mjs`.
+
 ## Notes
 
 - The HTTP bridge is local-only by default and uses `127.0.0.1:8000`.
