@@ -483,10 +483,13 @@ test("renders the manifest with the per-app name", () => {
 // Tripwires: the deployed-app path only works if Nitro scans server/ — an
 // accidental edit that drops serverDir or the middleware file would otherwise
 // fail silently (published apps would just render the app for ?install=1).
-test("vite config keeps the nitro serverDir wiring", () => {
+test("vite config keeps the Railway Nitro server wiring", () => {
   const viteConfig = readFileSync(join(TEMPLATE_ROOT, "vite.config.ts"), "utf8");
+  const packageJson = JSON.parse(readFileSync(join(TEMPLATE_ROOT, "package.json"), "utf8"));
+  assert.match(viteConfig, /preset:\s*"node-server"/);
   assert.match(viteConfig, /serverDir:\s*"\.\/server"/);
   assert.match(viteConfig, /grokPwaPlugin\(\)/);
+  assert.equal(packageJson.scripts.start, "node .output/server/index.mjs");
 });
 
 test("nitro middleware and its bundled assets exist", () => {
@@ -503,4 +506,3 @@ test("vite plugin bakes og identity as a virtual module", () => {
   assert.match(plugin, /virtual:grok-og-identity/);
   assert.match(plugin, /snapshotOgIdentity/);
 });
-
