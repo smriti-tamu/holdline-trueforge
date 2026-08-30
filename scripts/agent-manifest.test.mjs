@@ -36,3 +36,31 @@ test("Holdline manifest preserves the locked checkout safety path", async () => 
   assert.match(instructions, /Enter RESOLVE only when post-action tools prove recovery/);
   assert.match(instructions, /report NOT RECOVERED, keep the incident UNRESOLVED/);
 });
+
+// Regression test for a live run where the model treated the checkout-only
+// deploy 4c21 / baseline 9e10 rollback as universal: given an unrelated
+// alert with no data in the mock catalog, it retried get_alert/query_metrics
+// with guessed alertIds like "checkout" instead of accepting the empty
+// result, matched the catalog's substring search by accident, and presented
+// the checkout scenario's telemetry as the diagnosis for a different
+// incident — asking to roll back 4c21 for a problem that had nothing to do
+// with it. The instructions must make the alert-substitution explicitly
+// wrong and scope the 4c21/9e10 remediation to the actual checkout alert
+// text, not just describe it as "the locked checkout demo" with no test for
+// which incident that is.
+test("Holdline manifest scopes the checkout rollback to the actual alert and forbids alertId substitution", async () => {
+  const { instructions } = await readManifest();
+
+  assert.match(instructions, /never substitute a different alertId/i);
+  assert.match(instructions, /not a reason to retry with a different alertId/i);
+  assert.match(instructions, /never borrow another alert's data/i);
+  assert.match(instructions, /no usable evidence for this specific alert.*low confidence/i);
+  // The 4c21/9e10 remediation must be conditioned on the literal checkout
+  // alert text, not asserted as a standing fact independent of which alert
+  // is under investigation.
+  assert.match(
+    instructions,
+    /Only for the exact locked checkout alert text.*do deploy 4c21 and baseline 9e10 apply/i,
+  );
+  assert.match(instructions, /never from 4c21\/9e10/i);
+});
