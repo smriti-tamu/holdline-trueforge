@@ -486,10 +486,13 @@ test("renders the manifest with the per-app name", () => {
 test("vite config keeps the Railway Nitro server wiring", () => {
   const viteConfig = readFileSync(join(TEMPLATE_ROOT, "vite.config.ts"), "utf8");
   const packageJson = JSON.parse(readFileSync(join(TEMPLATE_ROOT, "package.json"), "utf8"));
+  const startScript = readFileSync(join(TEMPLATE_ROOT, "scripts/start.mjs"), "utf8");
   assert.match(viteConfig, /preset:\s*"node-server"/);
   assert.match(viteConfig, /serverDir:\s*"\.\/server"/);
   assert.match(viteConfig, /grokPwaPlugin\(\)/);
-  assert.equal(packageJson.scripts.start, "node .output/server/index.mjs");
+  assert.equal(packageJson.scripts.start, "node scripts/start.mjs");
+  assert.match(startScript, /process\.env\.NITRO_HOST \?\?= "0\.0\.0\.0"/);
+  assert.match(startScript, /process\.env\.PORT \?\?= "8080"/);
 });
 
 test("nitro middleware and its bundled assets exist", () => {
