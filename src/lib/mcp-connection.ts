@@ -602,7 +602,13 @@ async function loadTrueForgeManifest() {
         generative_ui: { enabled: true },
         ask_user_questions: { enabled: true },
         dynamic_sub_agents: { enabled: true },
-        iteration_limit: 40,
+        // Kept in sync with agent.json's own config.iteration_limit — this
+        // fallback only fires when agent.json is missing or fails to parse,
+        // but a stale lower number here would silently regress the turn
+        // budget for that path. The locked checkout run (get_alert + 3
+        // subagents + trace + tickets + sandbox + propose + approval +
+        // rollback + verify) needs headroom past 40 to reach Verify.
+        iteration_limit: 100,
       },
     };
   }
