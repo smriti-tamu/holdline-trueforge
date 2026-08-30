@@ -568,12 +568,35 @@ async function runRemoteHttpHandshake(
   }
 }
 
-async function loadAgentManifest() {
+/**
+ * Returns null (not a throw) when agent.json is missing, unreadable, or not
+ * valid JSON, so loadTrueForgeManifest()'s `!base` check can select its
+ * inline fallback manifest for those cases. Before this, a missing or
+ * malformed agent.json threw out of loadAgentManifest() entirely — past
+ * loadTrueForgeManifest()'s fallback check, which only runs after `await
+ * loadAgentManifest()` resolves — so runTrueForgeSync()'s outer try/catch
+ * turned it into a failed sync (`{ ok: false }`) instead of falling back to
+ * the safe 100-iteration manifest the fallback branch exists to provide.
+ */
+export async function loadAgentManifest(root: string = process.cwd()) {
   const { readFile } = await import("node:fs/promises");
   const { resolve } = await import("node:path");
-  const manifestPath = resolve(process.cwd(), "agent.json");
-  const text = await readFile(manifestPath, "utf8");
-  const parsed = JSON.parse(text) as { manifest?: unknown } | unknown;
+  const manifestPath = resolve(root, "agent.json");
+
+  let text: string;
+  try {
+    text = await readFile(manifestPath, "utf8");
+  } catch {
+    return null;
+  }
+
+  let parsed: { manifest?: unknown } | unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+
   if (parsed && typeof parsed === "object" && "manifest" in parsed) {
     return (parsed as { manifest: unknown }).manifest;
   }
