@@ -199,6 +199,17 @@ function normalize(text) {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+/**
+ * normalize() plus stripping trailing sentence punctuation, for the one spot
+ * (rollback_deployment) that compares a caller-supplied alertId against a
+ * known literal string rather than doing keyword matching. Deliberately not
+ * used by matchScenario()/resolveAlert(): those already do substring
+ * matching and don't need it.
+ */
+function normalizeForMatch(text) {
+  return normalize(text).replace(/[.!?]+$/, "");
+}
+
 function matchScenario(alertId) {
   const value = normalize(alertId);
   if (value.includes("checkout") || value.includes("4c21")) return TEST_ALERTS[0];
@@ -260,9 +271,44 @@ function listToolsResult() {
   return { tools: TOOLS };
 }
 
+/**
+ * Enforce the inputSchema each tool already declares. Without this, a call
+ * with the wrong shape (e.g. { baseline_id, deploy_id, region } instead of
+ * { alertId }) silently falls through resolveAlert()'s "unknown alert"
+ * fallback instead of failing — indistinguishable, from the caller's side,
+ * from a genuinely unrecognized alert. That's how a subagent that guesses a
+ * tool's parameters ends up reading "no matching records" as "this deploy
+ * doesn't exist" instead of "I called this wrong," and gives up instead of
+ * retrying with the right shape.
+ */
+function validateArguments(name, args) {
+  const tool = TOOLS.find((candidate) => candidate.name === name);
+  if (!tool) throw new Error(`Unknown tool: ${name}`);
+
+  const schema = tool.inputSchema;
+  const provided = args && typeof args === "object" ? args : {};
+  const allowedKeys = new Set(Object.keys(schema.properties ?? {}));
+  const missing = (schema.required ?? []).filter((key) => !(key in provided));
+  const unexpected =
+    schema.additionalProperties === false
+      ? Object.keys(provided).filter((key) => !allowedKeys.has(key))
+      : [];
+
+  if (missing.length > 0 || unexpected.length > 0) {
+    const problems = [];
+    if (missing.length > 0) problems.push(`missing required field(s): ${missing.join(", ")}`);
+    if (unexpected.length > 0) problems.push(`unexpected field(s): ${unexpected.join(", ")}`);
+    throw new Error(
+      `Invalid arguments for ${name} (${problems.join("; ")}). Expected shape: ` +
+        `{ ${Array.from(allowedKeys).join(", ")} }, required: [${(schema.required ?? []).join(", ")}].`,
+    );
+  }
+}
+
 let checkoutRecoveryActive = false;
 
 function callTool(name, args) {
+  validateArguments(name, args);
   const { scenario, alertId } = resolveAlert(args);
 
   if (name === "get_alert") {
@@ -331,9 +377,19 @@ function callTool(name, args) {
       ? args.targetDeploy.trim()
       : "";
 
-  if (requestedAlertId !== supportedAlertId) {
+  // Compare on normalized text (case/whitespace/trailing punctuation) so a
+  // model that reproduces the alert from memory rather than copy-pasting it
+  // isn't hard-rejected over a dropped trailing period. A live run did
+  // exactly this: it sent the alert text verbatim minus the final ".", got
+  // rejected, then misread the rejection's *prose* ("...only supports the
+  // checkout alert for deploy 4c21.") as if that short phrase were itself
+  // the expected alertId, and retried with that instead. The error now
+  // quotes the exact expected string so a retry has something correct to
+  // copy rather than a description to guess from.
+  if (normalizeForMatch(requestedAlertId) !== normalizeForMatch(supportedAlertId)) {
     throw new Error(
-      "Unsupported remediation: this mock rollback only supports the checkout alert for deploy 4c21.",
+      `Unsupported remediation: this mock rollback only supports the exact checkout alert text. ` +
+        `Expected alertId: "${supportedAlertId}". Received: "${requestedAlertId}".`,
     );
   }
 
