@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "node scripts/with-app-env.mjs vite dev --host 0.0.0.0 --port 8080",
     "dev:local": "PATH=\"./node_modules/.bin:$PATH\" node scripts/with-app-env.mjs vite dev --host 127.0.0.1 --port 0",
+    "start": "node scripts/start.mjs",
     "mcp:incident-monitoring": "node mcp/incident-monitoring/server.mjs",
     "mcp:incident-monitoring:http": "node mcp/incident-monitoring/http.mjs",
     "build": "node scripts/with-app-env.mjs vite build && npm run db:migrate",
