@@ -260,17 +260,37 @@ function validateArguments(name, args) {
 
   const schema = tool.inputSchema;
   const provided = args && typeof args === "object" ? args : {};
-  const allowedKeys = new Set(Object.keys(schema.properties ?? {}));
+  const properties = schema.properties ?? {};
+  const allowedKeys = new Set(Object.keys(properties));
   const missing = (schema.required ?? []).filter((key) => !(key in provided));
   const unexpected =
     schema.additionalProperties === false
       ? Object.keys(provided).filter((key) => !allowedKeys.has(key))
       : [];
+  // Presence isn't enough — every current schema declares string properties,
+  // and resolveAlert() silently coerces a non-string alertId to "", which
+  // degrades to the same normal-looking "no matching records" response this
+  // function exists to prevent. { alertId: 123 } passed the key-only check
+  // that shipped first; this catches wrong-typed values (including null,
+  // whose typeof is "object" and would otherwise slip past a naive check).
+  const wrongType = Object.keys(provided)
+    .filter((key) => allowedKeys.has(key))
+    .filter((key) => {
+      const expected = properties[key]?.type;
+      return expected != null && typeof provided[key] !== expected;
+    });
 
-  if (missing.length > 0 || unexpected.length > 0) {
+  if (missing.length > 0 || unexpected.length > 0 || wrongType.length > 0) {
     const problems = [];
     if (missing.length > 0) problems.push(`missing required field(s): ${missing.join(", ")}`);
     if (unexpected.length > 0) problems.push(`unexpected field(s): ${unexpected.join(", ")}`);
+    if (wrongType.length > 0) {
+      const details = wrongType.map((key) => {
+        const actual = provided[key] === null ? "null" : typeof provided[key];
+        return `'${key}' must be ${properties[key].type}, got ${actual}`;
+      });
+      problems.push(`wrong type: ${details.join("; ")}`);
+    }
     throw new Error(
       `Invalid arguments for ${name} (${problems.join("; ")}). Expected shape: ` +
         `{ ${Array.from(allowedKeys).join(", ")} }, required: [${(schema.required ?? []).join(", ")}].`,
@@ -283,7 +303,9 @@ function callTool(name, args, sessionState) {
   const { scenario, alertId } = resolveAlert(args);
 
   if (name === "get_alert") {
-    if (alertId === TEST_ALERTS[0].alert) sessionState.checkoutRecoveryActive = false;
+    if (normalizeForMatch(alertId) === normalizeForMatch(TEST_ALERTS[0].alert)) {
+      sessionState.checkoutRecoveryActive = false;
+    }
     return toolText(
       "Stage 1 - Alert Reception",
       jsonText({
@@ -298,7 +320,10 @@ function callTool(name, args, sessionState) {
   }
 
   if (name === "query_metrics") {
-    if (sessionState.checkoutRecoveryActive && alertId === TEST_ALERTS[0].alert) {
+    if (
+      sessionState.checkoutRecoveryActive &&
+      normalizeForMatch(alertId) === normalizeForMatch(TEST_ALERTS[0].alert)
+    ) {
       return toolText(
         "Post-rollback metrics",
         jsonText({
@@ -312,7 +337,10 @@ function callTool(name, args, sessionState) {
   }
 
   if (name === "query_logs") {
-    if (sessionState.checkoutRecoveryActive && alertId === TEST_ALERTS[0].alert) {
+    if (
+      sessionState.checkoutRecoveryActive &&
+      normalizeForMatch(alertId) === normalizeForMatch(TEST_ALERTS[0].alert)
+    ) {
       return toolText(
         "Post-rollback logs",
         jsonText({

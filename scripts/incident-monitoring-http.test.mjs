@@ -204,6 +204,78 @@ test("a tool call with the wrong argument shape is rejected, not silently degrad
   assert.match(valid.result.content[0].text, /9e10  stable baseline/);
 });
 
+// Regression test for a Qodo review finding on the schema-validation fix
+// above: validateArguments() checked key presence but never value type, so
+// { alertId: 123 } (or null) passed validation — every key required, no
+// unexpected keys — and then resolveAlert()'s `typeof input?.alertId ===
+// "string" ? ... : ""` silently coerced the non-string value to "", which
+// degrades to the exact same normal-looking "no matching records" response
+// the schema check exists to prevent, just reached through a wrong-typed
+// value instead of a wrong-named key.
+test("a tool call with a present but wrong-typed field is rejected, not silently coerced", async (t) => {
+  const port = await reservePort();
+  const child = spawn(process.execPath, ["mcp/incident-monitoring/http.mjs"], {
+    cwd: new URL("..", import.meta.url),
+    env: { ...process.env, HOST: "127.0.0.1", PORT: String(port) },
+    stdio: "ignore",
+  });
+  t.after(() => child.kill());
+
+  const base = `http://127.0.0.1:${port}`;
+  await waitForHealth(`${base}/health`);
+
+  let requestId = 0;
+  const initResponse = await fetch(`${base}/mcp`, {
+    method: "POST",
+    headers: {
+      accept: "application/json, text/event-stream",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: (requestId += 1),
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-03-26",
+        capabilities: {},
+        clientInfo: { name: "test", version: "1.0.0" },
+      },
+    }),
+  });
+  const sessionId = initResponse.headers.get("mcp-session-id");
+  assert.ok(sessionId);
+
+  async function callTool(name, args) {
+    const response = await fetch(`${base}/mcp`, {
+      method: "POST",
+      headers: {
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+        "mcp-session-id": sessionId,
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: (requestId += 1),
+        method: "tools/call",
+        params: { name, arguments: args },
+      }),
+    });
+    return response.json();
+  }
+
+  const numericAlertId = await callTool("query_metrics", { alertId: 123 });
+  assert.ok(numericAlertId.error, "a number where a string is required must be rejected");
+  assert.match(numericAlertId.error.message, /alertId.*must be string/i);
+  assert.match(numericAlertId.error.message, /got number/i);
+
+  const nullAlertId = await callTool("query_metrics", { alertId: null });
+  assert.ok(nullAlertId.error, "null must be rejected, not treated as the string type it isn't");
+  assert.match(nullAlertId.error.message, /got null/i);
+
+  const validString = await callTool("query_metrics", { alertId: checkoutAlert });
+  assert.equal(validString.error, undefined);
+});
+
 // Regression test for a second failure mode seen in the same live run: the
 // model reproduced the alert text from memory (not a copy-paste) and dropped
 // the trailing period. The exact-string check rejected it, and the model
@@ -282,4 +354,85 @@ test("rollback_deployment tolerates trivial text drift but still rejects the wro
   });
   assert.ok(wrongAlert.error);
   assert.match(wrongAlert.error.message, new RegExp(checkoutAlert.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
+// Regression test for a second Qodo review finding, on the same trivial-drift
+// fix: rollback_deployment's acceptance check became tolerant of drift
+// (case/whitespace/trailing punctuation), but query_metrics/query_logs's
+// "was this alert's checkout just rolled back" check still used strict `===`
+// against the canonical alert text. A caller that gets its drifted alertId
+// accepted by rollback_deployment and then reuses that *same* drifted text to
+// verify recovery would fall through to the pre-rollback branch — a
+// genuinely successful remediation reads as if nothing happened, right at
+// the "prove recovery before resolving" check the whole safety design
+// depends on.
+test("verifying recovery with the same drifted alertId that rollback accepted still sees the recovered state", async (t) => {
+  const port = await reservePort();
+  const child = spawn(process.execPath, ["mcp/incident-monitoring/http.mjs"], {
+    cwd: new URL("..", import.meta.url),
+    env: { ...process.env, HOST: "127.0.0.1", PORT: String(port) },
+    stdio: "ignore",
+  });
+  t.after(() => child.kill());
+
+  const base = `http://127.0.0.1:${port}`;
+  await waitForHealth(`${base}/health`);
+
+  let requestId = 0;
+  const initResponse = await fetch(`${base}/mcp`, {
+    method: "POST",
+    headers: {
+      accept: "application/json, text/event-stream",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: (requestId += 1),
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-03-26",
+        capabilities: {},
+        clientInfo: { name: "test", version: "1.0.0" },
+      },
+    }),
+  });
+  const sessionId = initResponse.headers.get("mcp-session-id");
+  assert.ok(sessionId);
+
+  async function callTool(name, args) {
+    const response = await fetch(`${base}/mcp`, {
+      method: "POST",
+      headers: {
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+        "mcp-session-id": sessionId,
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: (requestId += 1),
+        method: "tools/call",
+        params: { name, arguments: args },
+      }),
+    });
+    return response.json();
+  }
+
+  const droppedPeriod = checkoutAlert.replace(/\.$/, "");
+
+  const rollback = await callTool("rollback_deployment", {
+    alertId: droppedPeriod,
+    targetDeploy: "9e10",
+  });
+  assert.equal(rollback.error, undefined);
+  assert.match(rollback.result.content[0].text, /simulated_success/);
+
+  // Verify with the exact same drifted text the rollback call used — this
+  // must see the recovered/post-rollback data, not the original pre-rollback
+  // scenario data.
+  const metrics = await callTool("query_metrics", { alertId: droppedPeriod });
+  assert.match(metrics.result.content[0].text, /8\.7% -> 0\.4%/);
+  assert.doesNotMatch(metrics.result.content[0].text, /0\.3% -> 8\.7%/);
+
+  const logs = await callTool("query_logs", { alertId: droppedPeriod });
+  assert.match(logs.result.content[0].text, /No new PaymentAdapter timeout errors/);
 });
